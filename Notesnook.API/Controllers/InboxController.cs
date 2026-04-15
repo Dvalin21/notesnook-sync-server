@@ -63,7 +63,7 @@ namespace Notesnook.API.Controllers
 
         [HttpPost("api-keys")]
         [Authorize(Policy = "Notesnook")]
-        public async Task<IActionResult> CreateApiKeyAsync([FromBody] InboxApiKey request)
+        public async Task<IActionResult> CreateApiKeyAsync([FromBody] CreateInboxApiKeyRequest request)
         {
             var userId = User.GetUserId();
             try

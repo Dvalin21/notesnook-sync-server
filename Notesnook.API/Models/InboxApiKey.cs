@@ -24,6 +24,15 @@ using NanoidDotNet;
 
 namespace Notesnook.API.Models
 {
+    public class CreateInboxApiKeyRequest
+    {
+        [JsonPropertyName("name")]
+        public required string Name { get; set; }
+
+        [JsonPropertyName("expiryDate")]
+        public long ExpiryDate { get; set; }
+    }
+
     public class InboxApiKey
     {
         public InboxApiKey()
