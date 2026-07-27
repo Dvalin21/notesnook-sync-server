@@ -1,102 +1,212 @@
-# Notesnook Sync Server
+# Notesnook Sync Server (Dvalin21 fork)
 
-This repo contains the full source code of the Notesnook Sync Server licensed under AGPLv3.
+Full source for the Notesnook sync backend (Notesnook / Streetwriters). AGPLv3 licensed.
 
-## Building
+This fork contains operational hardening fixes (CORS env-var, MONGODB_DATABASE_NAME, restart policies, DataProtection key persistence, image pinning). The original upstream README and INSTALL are superseded by this file.
 
-### From source
+What this stack runs (all in Docker):
+- identity-server — authentication & signup (port 8264)
+- notesnook-server — sync engine (port 5264)
+- sse-server — server-sent events for real-time sync (port 7264)
+- monograph-server — web client (port 6264)
+- notesnook-db — MongoDB 7 replica set
+- notesnook-s3 — Minio S3 storage for attachments (internal only)
+- setup-s3 — one-shot bucket creator (runs once, then stops)
 
-Requirements:
+You still need your own TLS termination in front (Caddy, nginx, Traefik, Cloudflare Tunnel, etc.). The stack speaks plain HTTP internally.
 
-1. [.NET 8](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
-2. [git](https://git-scm.com/downloads)
-
-The first step is to `clone` the repository:
+## Quick start (the caveman version)
 
 ```bash
-git clone https://github.com/streetwriters/notesnook-sync-server.git
+# 1. Clone this repo (NOT the upstream — this fork has the fixes)
+git clone https://github.com/Dvalin21/notesnook-sync-server.git
+cd notesnook-sync-server
 
-# change directory
+# 2. Copy the template env file and set real values
+cp .env .env.local
+nano .env.local   # edit ALL the values — see settings below
+
+# 3. Start everything
+docker compose up -d
+
+# 4. Watch it boot
+docker compose logs -f
+# wait for "All required environment variables are set." from validate service
+
+# 5. Check health
+curl -fsS http://localhost:5264/health && echo " sync OK"
+curl -fsS http://localhost:8264/health && echo " auth OK"
+curl -fsS http://localhost:7264/health && echo " sse OK"
+curl -fsS http://localhost:3000/api/health && echo " monograph OK"
+
+# 6. Open monograph in browser (behind YOUR TLS proxy)
+#    http://monogr.ph  (or whatever MONOGRAPH_PUBLIC_URL you set)
+```
+
+That it. If anything fails, `docker compose logs <service name>` shows why.
+
+## Settings — what every env var does
+
+Copy `.env` to `.env.local`, never commit `.env.local` to git.
+
+### Required
+
+| Variable | What it does | Example |
+|---|---|---|
+| `INSTANCE_NAME` | Human name for this server | `my-notesnook` |
+| `NOTESNOOK_API_SECRET` | API auth secret (must differ from upstream). Generate with `openssl rand -base64 48`. | `a1b2c3...` |
+| `DISABLE_SIGNUPS` | `true` = nobody can register new accounts (recommended). `false` = open registration. | `true` |
+| `SMTP_HOST` | outgoing mail server hostname | `smtp.example.com` |
+| `SMTP_PORT` | outgoing mail server port | `587` |
+| `SMTP_USERNAME` | SMTP login user | `alerts@example.com` |
+| `SMTP_PASSWORD` | SMTP login password | `***` |
+| `SMTP_FROM_NAME` | sender name in emails | `My Notesnook` |
+| `AUTH_SERVER_PUBLIC_URL` | base URL the Notesnook app uses to reach identity-server | `https://auth.mydomain.com` |
+| `NOTESNOOK_APP_PUBLIC_URL` | base URL the app uses to reach sync server | `https://sync.mydomain.com` |
+| `MONOGRAPH_PUBLIC_URL` | base URL for the web client | `https://mydomain.com` |
+| `ATTACHMENTS_SERVER_PUBLIC_URL` | base URL where Minio attachments are reachable (via your TLS proxy) | `https://attach.mydomain.com` |
+
+### Optional (defaults work for most)
+
+| Variable | Default | What |
+|---|---|---|
+| `MONGODB_DATABASE_NAME` | `notesnook` | MongoDB database name. Changing it now honors the env var (was hardcoded before). |
+| `NOTESNOOK_CORS_ORIGINS` | *(empty)* | Comma-separated list of allowed browser CORS origins. Leave empty = any origin allowed (fine behind your TLS proxy). |
+| `MINIO_ROOT_USER` | `minioadmin` | Minio admin user. `minioadmin` default is well-known — change it. |
+| `MINIO_ROOT_PASSWORD` | `minioadmin` | Minio admin password. Same warning. |
+| `IS_SELF_HOSTED` | *(auto)* | Set automatically based on `AUTH_SERVER_PUBLIC_URL` format. Don't touch unless you know why. |
+
+## How to install — full step by step
+
+### Prerequisites
+
+- Docker and Docker Compose v2 on a Linux host.
+- A domain or LAN IP you control. Notesnook clients need fixed URLs.
+- Ports you'll use (you only need to expose these through your TLS proxy, not directly to the internet):
+  - 5264 — sync
+  - 8264 — auth
+  - 7264 — SSE
+  - 6264 — web client
+  - 9000 — Minio (INTERNAL ONLY, never expose publicly)
+- Minimum 2 GB RAM, a few GB disk for notes + attachments.
+
+### Step 1 — get the code
+
+```bash
+cd ~/host
+git clone https://github.com/Dvalin21/notesnook-sync-server.git
 cd notesnook-sync-server
 ```
 
-Once you are inside the `./notesnook-sync-server` directory, run:
+### Step 2 — generate strong secrets
 
 ```bash
-# this might take a while to complete
-dotnet restore Notesnook.sln
+# API secret (use this for NOTESNOOK_API_SECRET)
+openssl rand -base64 48
+
+# Minio admin credentials
+openssl rand -base64 12   # username (min 3 chars)
+openssl rand -base64 24   # password (min 8 chars)
 ```
 
-Then build all projects:
+### Step 3 — configure the env file
 
 ```bash
-dotnet build Notesnook.sln
+cp .env .env.local
+nano .env.local
 ```
 
-To run the `Notesnook.API` project:
+Set the Required variables from the table above. The `.env` template has placeholder values — replace every one of them.
+
+Don't expose Minio port 9000 to the internet. Your TLS proxy reaches it internally via docker network.
+
+### Step 4 — set up TLS / reverse proxy
+
+This stack has no built-in TLS. Put something in front. Example Caddy (simplest):
+
+```
+auth.mydomain.com {
+  reverse_proxy localhost:8264
+}
+sync.mydomain.com {
+  reverse_proxy localhost:5264
+}
+sse.mydomain.com {
+  reverse_proxy localhost:7264
+
+monogr.ph {
+  reverse_proxy localhost:6264
+}
+attach.mydomain.com {
+  reverse_proxy localhost:9000
+}
+```
+
+Set `AUTH_SERVER_PUBLIC_URL`, `NOTESNOOK_APP_PUBLIC_URL`, `MONOGRAPH_PUBLIC_URL`, `ATTACHMENTS_SERVER_PUBLIC_URL` to match these HTTPS names.
+
+### Step 5 — run
 
 ```bash
-dotnet run --project Notesnook.API/Notesnook.API.csproj
+docker compose up -d
+docker compose logs -f
 ```
 
-To run the `Streetwriters.Messenger` project:
+Wait for the validate service to print "All required environment variables are set." Then check health endpoints (see Quick start above).
+
+### Step 6 — create your first account
+
+Go to your Notesnook client (app or web) → Settings → Sync → "Use custom server". Enter the URLs from `AUTH_SERVER_PUBLIC_URL`, `NOTESNOOK_APP_PUBLIC_URL`, etc. The first account you create becomes the admin — with `DISABLE_SIGNUPS=true` you must use that one account for everything unless you set it to false temporarily.
+
+## What's different in this fork vs upstream
+
+1. CORS env var `NOTESNOOK_CORS_ORIGINS` actually works (upstream read the wrong env key).
+2. `MONGODB_DATABASE_NAME` env var is honored for all 13 collections (was hardcoded to "notesnook" for 7 of them).
+3. All app services have `restart: unless-stopped` (upstream had none — a crash left services permanently down).
+4. `dpdata` volume persists DataProtection keys so container restarts don't invalidate all auth tokens.
+5. `autoheal` removed (unnecessary socket mount, replaced by native restart policies).
+6. Minio port 9000 not exposed to host (internal only).
+7. All streetwriters images pinned to `v1.0-beta.32`, monograph to `1.3.1` (was `:latest` everywhere).
+8. Monograph / sync / SSE / identity healthchecks use `curl` instead of `wget` (wget missing in monograph image).
+9. `setup-s3` bucket creation is idempotent (`|| true`).
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `validate` service exits 1 | Missing required env var | Check `.env.local`, `docker compose logs validate` |
+| Signup fails with "scope validation error" | Minio admin not changed from default | Set `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` to strong values |
+| Sync works but web client blank | `MONOGRAPH_PUBLIC_URL` wrong or CORS blocking | Set `MONOGRAPH_PUBLIC_URL` to match your browser URL exactly |
+| Attachments 404 | `ATTACHMENTS_SERVER_PUBLIC_URL` wrong | Must point at the same host the presigned URL uses |
+| Tokens invalidated after restart | DataProtection keys not persisted | `dpdata` volume missing or wrong mount path |
+| Notes disappearing | Sync conflict, not server bug | Export your notes regularly (see backup below) |
+
+## Backup (you need this or you will lose data)
 
 ```bash
-dotnet run --project Streetwriters.Messenger/Streetwriters.Messenger.csproj
+# MongoDB backup
+docker compose exec notesnook-db mongodump --uri="mongodb://localhost:27017/notesnook" --archive=/backup/notesnook-$(date +%Y%m%d).archive
+
+# Minio attachments backup
+docker compose exec notesnook-s3 mc mirror /data/s3 /backup/s3
 ```
 
-To run the `Streetwriters.Identity` project:
+Restore from backup needs the reverse process. There is no automatic backup — you run it or you lose notes.
 
-```bash
-dotnet run --project Streetwriters.Identity/Streetwriters.Identity.csproj
-```
+## Update policy
 
-### Using docker
+This stack uses pinned `v1.0-beta.32` tags. To update:
+1. `git pull origin master` in this repo
+2. `docker compose pull` only if you want the latest streetwriters images
+3. `docker compose up -d`
 
-The sync server can easily be started using Docker.
+Pinning means updates are deliberate, not accidental. Don't use `:latest` in production — it can break your server (upstream has done this before — issue #77).
 
-```bash
-wget https://raw.githubusercontent.com/streetwriters/notesnook-sync-server/master/docker-compose.yml
-```
+## Known issues (upstream, not fixed in this fork)
 
-And then use Docker Compose to start the servers:
-
-```bash
-docker compose up
-```
-
-This takes care of setting up everything including MongoDB, Minio etc.
-
-## TODO Self-hosting
-
-**Note: Self-hosting the Notesnook Sync Server is now possible, but without support. Documentation will be provided at a later date. We are working to enable full on-premise self-hosting, so stay tuned!**
-
-- [x] Open source the Sync server
-- [x] Open source the Identity server
-- [x] Open source the SSE Messaging infrastructure
-- [x] Fully Dockerize all services
-- [x] Use self-hosted Minio for S3 storage
-- [x] Publish on DockerHub
-- [x] Add settings to change server URLs in Notesnook client apps (starting from v3.0.18)
-- [ ] Write self hosting docs
+- #105 signup scope validation error: fixed in this fork by adding missing `profile` scope to `Config.cs`. If you still hit signup failures, grab a log and confirm the `profile` scope is reaching the identity server.
+- Client/server version skew (client #8698): app 3.3 broke self-hosted sync; fix was to pin the client to 3.2.4. Not fixable in this repo — pin the client version.
+- DataProtection keys still in a docker named volume. Back up `dpdata` or you lose tokens on volume loss.
 
 ## License
 
-```
-This file is part of the Notesnook Sync Server project (https://notesnook.com/)
-
-Copyright (C) 2023 Streetwriters (Private) Limited
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the Affero GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-Affero GNU General Public License for more details.
-
-You should have received a copy of the Affero GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
-```
+AGPLv3. See upstream LICENSE file.
