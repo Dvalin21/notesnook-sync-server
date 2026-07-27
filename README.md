@@ -1,4 +1,4 @@
-# Notesnook Sync Server (Dvalin21 fork)
+# Notesnook Sync Server (fork of streetwriters/notesnook-sync-server)
 
 Full source for the Notesnook sync backend (Notesnook / Streetwriters). AGPLv3 licensed.
 
@@ -18,10 +18,10 @@ You still need your own TLS termination in front (Caddy, nginx, Traefik, Cloudfl
 ## Quick start (the caveman version)
 
 ```bash
-# 1. Clone this repo (NOT the upstream — this fork has the fixes)
+# 1. Clone the repo (fork with reliability fixes applied)
 git clone https://github.com/Dvalin21/notesnook-sync-server.git
 cd notesnook-sync-server
-
+```
 # 2. Copy the template env file and set real values
 cp .env .env.local
 nano .env.local   # edit ALL the values — see settings below
