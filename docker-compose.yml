@@ -136,6 +136,12 @@ services:
       - notesnook-s3
       - setup-s3
       - identity-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:5264/health"]
+      interval: 40s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
     environment:
       <<: *server-discovery
       MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/?replSet=rs0
@@ -161,6 +167,12 @@ services:
     depends_on:
       - identity-server
       - notesnook-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:7264/health"]
+      interval: 40s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
     environment:
       <<: *server-discovery
 
@@ -176,24 +188,17 @@ services:
     env_file: *env-files
     depends_on:
       - notesnook-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/api/health"]
+      interval: 40s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
     environment:
       <<: *server-discovery
       API_HOST: http://notesnook-server:5264
       PUBLIC_URL: ${MONOGRAPH_PUBLIC_URL}
 
-  autoheal:
-    image: willfarrell/autoheal:latest
-    tty: true
-    restart: always
-    environment:
-      - AUTOHEAL_INTERVAL=60
-      - AUTOHEAL_START_PERIOD=300
-      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
-    depends_on:
-      validate:
-        condition: service_completed_successfully
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
 networks:
   notesnook:
 
