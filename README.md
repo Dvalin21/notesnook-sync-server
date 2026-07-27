@@ -19,7 +19,7 @@ You still need your own TLS termination in front (Caddy, nginx, Traefik, Cloudfl
 
 ```bash
 # 1. Clone the repo (fork with reliability fixes applied)
-git clone https://github.com/Dvalin21/notesnook-sync-server.git
+git clone https://github.com/streetwriters/notesnook-sync-server.git
 cd notesnook-sync-server
 ```
 # 2. Copy the template env file and set real values
@@ -94,7 +94,7 @@ Copy `.env` to `.env.local`, never commit `.env.local` to git.
 
 ```bash
 cd ~/host
-git clone https://github.com/Dvalin21/notesnook-sync-server.git
+git clone https://github.com/streetwriters/notesnook-sync-server.git
 cd notesnook-sync-server
 ```
 
