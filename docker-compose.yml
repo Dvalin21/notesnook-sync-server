@@ -48,7 +48,7 @@ services:
     restart: "no"
 
   notesnook-db:
-    image: mongo:7.0.12
+    image: mongo:7.0.39
     hostname: notesnook-db
     restart: unless-stopped
     volumes:
