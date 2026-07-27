@@ -78,7 +78,10 @@ namespace Streetwriters.Common
         public static string? SUBSCRIPTIONS_SERVER_HOST => ReadSecret("SUBSCRIPTIONS_SERVER_HOST");
         public static string? SUBSCRIPTIONS_CERT_PATH => ReadSecret("SUBSCRIPTIONS_CERT_PATH");
         public static string? SUBSCRIPTIONS_CERT_KEY_PATH => ReadSecret("SUBSCRIPTIONS_CERT_KEY_PATH");
-        public static string[] NOTESNOOK_CORS_ORIGINS => ReadSecret("NOTESNOOK_CORS")?.Split(",") ?? [];
+        // ponytail: env var name changed from NOTESNOOK_CORS to NOTESNOOK_CORS_ORIGINS to match .env documentation.
+        // Previously the var was undocumented as NOTESNOOK_CORS and the .env sample used NOTESNOOK_CORS_ORIGINS,
+        // causing self-hosters to set the wrong variable and get AllowAnyOrigin() (security gap).
+        public static string[] NOTESNOOK_CORS_ORIGINS => ReadSecret("NOTESNOOK_CORS_ORIGINS")?.Split(",") ?? [];
         public static string? SIGNALR_REDIS_CONNECTION_STRING => ReadSecret("SIGNALR_REDIS_CONNECTION_STRING");
         public static string MONOGRAPH_PUBLIC_URL => ReadSecret("MONOGRAPH_PUBLIC_URL") ?? "https://monogr.ph";
 

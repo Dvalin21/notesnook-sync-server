@@ -176,13 +176,16 @@ namespace Notesnook.API
             services.AddScoped<IDbContext, MongoDbContext>();
             services.AddScoped<IUnitOfWork, UnitOfWork>();
 
-            services.AddRepository<UserSettings>("user_settings", "notesnook")
-                    .AddRepository<Monograph>("monographs", "notesnook")
-                    .AddRepository<Announcement>("announcements", "notesnook")
-                    .AddRepository<DeviceIdsChunk>(Collections.DeviceIdsChunksKey, "notesnook")
-                    .AddRepository<SyncDevice>(Collections.SyncDevicesKey, "notesnook")
-                    .AddRepository<InboxApiKey>(Collections.InboxApiKeysKey, "notesnook")
-                    .AddRepository<InboxSyncItem>(Collections.InboxItemsKey, "notesnook");
+            // ponytail: DB_NAME constant replaces hardcoded "notesnook" — fixes MONGODB_DATABASE_NAME bug (#86).
+            // Default is still "notesnook" so existing deploys are backward-compatible.
+            var dbName = Constants.MONGODB_DATABASE_NAME;
+            services.AddRepository<UserSettings>("user_settings", dbName)
+                    .AddRepository<Monograph>("monographs", dbName)
+                    .AddRepository<Announcement>("announcements", dbName)
+                    .AddRepository<DeviceIdsChunk>(Collections.DeviceIdsChunksKey, dbName)
+                    .AddRepository<SyncDevice>(Collections.SyncDevicesKey, dbName)
+                    .AddRepository<InboxApiKey>(Collections.InboxApiKeysKey, dbName)
+                    .AddRepository<InboxSyncItem>(Collections.InboxItemsKey, dbName);
 
             services.AddMongoCollection(Collections.SettingsKey)
                     .AddMongoCollection(Collections.AttachmentsKey)
