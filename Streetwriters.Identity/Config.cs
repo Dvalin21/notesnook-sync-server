@@ -55,6 +55,7 @@ namespace Streetwriters.Identity
             {
                 new ApiScope("notesnook.sync", "Notesnook Syncing Access"),
                 new ApiScope(IdentityServerConstants.LocalApi.ScopeName),
+                new ApiScope("profile", "User profile information"),
                 new ApiScope(MFA_GRANT_TYPE_SCOPE, "Multi-factor authentication access"),
                 new ApiScope(MFA_PASSWORD_GRANT_TYPE_SCOPE, "Multi-factor authentication password step access")
             };
@@ -81,7 +82,7 @@ namespace Streetwriters.Identity
                     AbsoluteRefreshTokenLifetime = 0, // 0 means infinite sliding lifetime
                     
                     // scopes that client has access to
-                    AllowedScopes = { "notesnook.sync", "offline_access", "openid", IdentityServerConstants.LocalApi.ScopeName, "mfa" },
+                    AllowedScopes = { "notesnook.sync", "offline_access", "openid", IdentityServerConstants.LocalApi.ScopeName, "mfa", "profile" },
                 }
             };
     }
