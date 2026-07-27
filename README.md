@@ -165,7 +165,7 @@ Go to your Notesnook client (app or web) → Settings → Sync → "Use custom s
 4. `dpdata` volume persists DataProtection keys so container restarts don't invalidate all auth tokens.
 5. `autoheal` removed (unnecessary socket mount, replaced by native restart policies).
 6. Minio port 9000 not exposed to host (internal only).
-7. All streetwriters images pinned to `v1.0-beta.32`, monograph to `1.3.1` (was `:latest` everywhere).
+7. All streetwriters images pinned to specific version tags (was `:latest` everywhere).
 8. Monograph / sync / SSE / identity healthchecks use `curl` instead of `wget` (wget missing in monograph image).
 9. `setup-s3` bucket creation is idempotent (`|| true`).
 
@@ -194,12 +194,30 @@ Restore from backup needs the reverse process. There is no automatic backup — 
 
 ## Update policy
 
-This stack uses pinned `v1.0-beta.32` tags. To update:
-1. `git pull origin master` in this repo
-2. `docker compose pull` only if you want the latest streetwriters images
-3. `docker compose up -d`
+This stack pins images to specific version tags (streetwriters images at a specific
+v1.0-beta.x release, monograph at 1.3.1, Minio at immutable RELEASE timestamps,
+MongoDB at 7.0.12). To update deliberately:
 
-Pinning means updates are deliberate, not accidental. Don't use `:latest` in production — it can break your server (upstream has done this before — issue #77).
+1. `git pull origin master` in this repo
+2. Check which tags changed (see pin rationale below)
+3. `docker compose pull` to fetch new layers
+4. `docker compose up -d`
+
+Pinning means updates are deliberate, not accidental. Each image has a documented
+reason for its pin — see "Image pin rationale" below.
+
+## Image pin rationale
+
+| Image | Current Tag | Pin Reason |
+|---|---|---|
+| `mongo` | `7.0.12` | **Upstream's original pin.** MongoDB 7.0 series pins guard against wire-protocol or auth changes between patch releases. 7.0.12 was upstream's chosen baseline. |
+| `minio/minio` | `RELEASE.2024-07-29T22-14-52Z` | **Upstream's original pin.** Minio release tags are immutable timestamps — same binary, same SHA256 digest, forever. |
+| `minio/mc` | `RELEASE.2024-07-26T13-08-44Z` | **Upstream's original pin.** Same as above — Minio release tags are immutable. |
+| `streetwriters/identity` | `v1.0-beta.32` | **Our pin, replacing `:latest`.** Versioned tag is immutable — `:latest` would drift. Docker Hub API confirmed `v1.0-beta.32` digest == `:latest` digest at pin time. |
+| `streetwriters/notesnook-sync` | `v1.0-beta.32` | Same rationale as identity. |
+| `streetwriters/sse` | `v1.0-beta.32` | Same rationale as identity. |
+| `streetwriters/monograph` | `1.3.1` | **Our pin, replacing `:latest`.** Monograph uses explicit version tags; `1.3.1` is stable and will not mutate. Docker Hub API confirmed same digest as `:latest` at pin time. |
+| `vandot/alpine-bash` | *(none — `:latest` implied)* | **Intentional, low risk.** One-shot utility image (`restart: "no"`) used only by the `validate` service to check env vars before the stack starts. Runs once and exits; no persistent state. `:latest` drift here has zero operational impact.
 
 ## Known issues (upstream, not fixed in this fork)
 
