@@ -139,6 +139,12 @@ services:
       <<: *server-discovery
       MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replSet=rs0
       MONGODB_DATABASE_NAME: identity
+    healthcheck:
+      test: ["CMD", "wget", "--tries=1", "-nv", "-q", "http://localhost:8264/health", "-O-"]
+      interval: 40s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -163,7 +169,7 @@ services:
       - setup-s3
       - identity-server
     healthcheck:
-      test: ["CMD", "curl", "-f", "-s", "http://localhost:5264/health"]
+      test: ["CMD", "wget", "--tries=1", "-nv", "-q", "http://localhost:5264/health", "-O-"]
       interval: 40s
       timeout: 30s
       retries: 3
@@ -202,7 +208,7 @@ services:
       - identity-server
       - notesnook-server
     healthcheck:
-      test: ["CMD", "curl", "-f", "-s", "http://localhost:7264/health"]
+      test: ["CMD", "wget", "--tries=1", "-nv", "-q", "http://localhost:7264/health", "-O-"]
       interval: 40s
       timeout: 30s
       retries: 3
@@ -231,7 +237,7 @@ services:
     depends_on:
       - notesnook-server
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://[::1]:3000/api/health').then(r => process.exit(r.ok?0:1)).catch(() => process.exit(1))"]
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok?0:1)).catch(() => process.exit(1))"]
       interval: 40s
       timeout: 30s
       retries: 3
@@ -250,6 +256,70 @@ services:
           cpus: "0.25"
           memory: 128M
 
+  cors-proxy:
+    build: ./cors-proxy
+    restart: unless-stopped
+    networks:
+      - notesnook
+    env_file: *env-files
+    environment:
+      PORT: 3000
+      HOST: "0.0.0.0"
+      ALLOWED_ORIGINS: "${NOTESNOOK_CORS_ORIGINS}"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok?0:1)).catch(() => process.exit(1))"]
+      interval: 40s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          cpus: "0.1"
+          memory: 32M
+
+  caddy:
+    image: caddy:alpine
+    restart: unless-stopped
+    ports:
+      - 8080:80
+    networks:
+      - notesnook
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    environment:
+      DOMAIN: "${SERVER_DOMAIN:-localhost}"
+    depends_on:
+      - notesnook-server
+      - identity-server
+      - sse-server
+      - monograph-server
+      - notesnook-s3
+      - cors-proxy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          cpus: "0.1"
+          memory: 32M
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: always
+    tty: true
+    environment:
+      AUTOHEAL_INTERVAL: 60
+      AUTOHEAL_START_PERIOD: 300
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
 networks:
   notesnook:
 
@@ -257,4 +327,5 @@ volumes:
   dbdata:
   s3data:
   dpdata:
+  caddy-data:
 
