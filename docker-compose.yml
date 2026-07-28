@@ -48,7 +48,7 @@ services:
     restart: "no"
 
   notesnook-db:
-    image: mongo:7.0.12
+    image: mongo:8.0.28
     hostname: notesnook-db
     restart: unless-stopped
     volumes:
@@ -68,7 +68,7 @@ services:
       start_period: 60s
 
   notesnook-s3:
-    image: minio/minio:RELEASE.2024-07-29T22-14-52Z
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     volumes:
       - s3data:/data/s3
@@ -89,7 +89,7 @@ services:
   # There's no way to specify a default bucket in Minio so we have to
   # set it up ourselves. Uses the same minio image so no extra dependency.
   setup-s3:
-    image: minio/mc:RELEASE.2024-07-26T13-08-44Z
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     restart: "no"
     depends_on:
       - notesnook-s3
