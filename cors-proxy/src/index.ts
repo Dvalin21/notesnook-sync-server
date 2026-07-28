@@ -7,6 +7,9 @@ const PORT = Bun.env.PORT || 3000;
 const HOST = Bun.env.HOST || "localhost";
 const ALLOWED_ORIGINS = Bun.env.ALLOWED_ORIGINS?.split(",") || ["*"];
 const MAX_REDIRECTS = 5;
+const MAX_RESPONSE_SIZE = 50 * 1024 * 1024; // 50MB
+const PROXY_TIMEOUT_MS = 30000; // 30 seconds
+const ALLOWED_DOMAINS = Bun.env.ALLOWED_DOMAINS?.split(",") || [];
 
 // CORS headers configuration
 const corsHeaders = {
@@ -26,11 +29,70 @@ function logRequest(method: string, url: string, status: number) {
   console.log(`[${timestamp}] ${method} ${url} - ${status}`);
 }
 
-// Validate URL
+// Check if an IP address is private/internal
+function isPrivateIP(hostname: string): boolean {
+  // Check for localhost
+  if (hostname === "localhost" || hostname === "localhost.") return true;
+
+  // Check for .local domain
+  if (hostname.endsWith(".local") || hostname.endsWith(".local.")) return true;
+
+  // Check for .internal domain
+  if (hostname.endsWith(".internal") || hostname.endsWith(".internal.")) return true;
+
+  // Check for IPv6 loopback
+  if (hostname === "::1" || hostname === "0:0:0:0:0:0:0:1") return true;
+
+  // Check for IPv4 private ranges
+  const ipv4PrivateRanges = [
+    /^10\./,                    // 10.0.0.0/8
+    /^192\.168\./,             // 192.168.0.0/16
+    /^172\.(1[6-9]|2[0-9]|3[01])\./, // 172.16.0.0/12
+    /^127\./,                  // 127.0.0.0/8 (loopback)
+    /^169\.254\./,             // 169.254.0.0/16 (link-local)
+    /^0\./,                    // 0.0.0.0/8
+    /^100\.64\./,              // 100.64.0.0/10 (carrier-grade NAT)
+    /^224\./,                  // 224.0.0.0/4 (multicast)
+    /^240\./,                  // 240.0.0.0/4 (reserved)
+  ];
+  for (const range of ipv4PrivateRanges) {
+    if (range.test(hostname)) return true;
+  }
+
+  // Check for IPv6 private ranges
+  const ipv6PrivatePatterns = [
+    /^fe80:/i,                 // fe80::/10 (link-local)
+    /^fec0:/i,                 // fec0::/10 (deprecated site-local)
+    /^fc00:/i,                 // fc00::/7 (unique local)
+    /^fd00:/i,                 // fd00::/8 (unique local)
+    /^ff00:/i,                 // ff00::/8 (multicast)
+  ];
+  for (const pattern of ipv6PrivatePatterns) {
+    if (pattern.test(hostname)) return true;
+  }
+
+  return false;
+}
+
+// Validate URL and check for SSRF
 function isValidUrl(urlString: string): boolean {
   try {
     const url = new URL(urlString);
-    return url.protocol === "http:" || url.protocol === "https:";
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+
+    // SSRF protection: block private/internal IPs
+    if (isPrivateIP(url.hostname)) return false;
+
+    // If ALLOWED_DOMAINS is set, only allow those domains
+    if (ALLOWED_DOMAINS.length > 0) {
+      const isAllowed = ALLOWED_DOMAINS.some(
+        (domain) =>
+          url.hostname === domain || url.hostname.endsWith("." + domain),
+      );
+      if (!isAllowed) return false;
+    }
+
+    return true;
   } catch {
     return false;
   }
@@ -52,6 +114,7 @@ async function proxyRequest(
     const response = await fetch(targetUrl, {
       method: "GET",
       redirect: "manual",
+      signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
     });
 
     // Handle redirects manually
@@ -59,6 +122,13 @@ async function proxyRequest(
       const location = response.headers.get("Location");
       if (location) {
         const redirectUrl = new URL(location, targetUrl).toString();
+        // SSRF protection: validate redirect target
+        if (!isValidUrl(redirectUrl)) {
+          return new Response("Redirect to blocked URL", {
+            status: 403,
+            headers: corsHeaders,
+          });
+        }
         return proxyRequest(redirectUrl, redirectCount + 1);
       }
     }
@@ -96,7 +166,43 @@ async function proxyRequest(
     responseHeaders.delete("x-proxy");
     responseHeaders.delete("x-cache");
 
-    return new Response(response.body, {
+    // Enforce response size limit
+    const contentLength = response.headers.get("content-length");
+    if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_SIZE) {
+      return new Response("Response too large", {
+        status: 413,
+        headers: corsHeaders,
+      });
+    }
+
+    // Stream with size limit
+    const reader = response.body?.getReader();
+    if (!reader) {
+      return new Response("No response body", {
+        status: 502,
+        headers: corsHeaders,
+      });
+    }
+
+    let totalBytes = 0;
+    const chunks: Uint8Array[] = [];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.length;
+      if (totalBytes > MAX_RESPONSE_SIZE) {
+        reader.releaseLock();
+        return new Response("Response too large", {
+          status: 413,
+          headers: corsHeaders,
+        });
+      }
+      chunks.push(value);
+    }
+
+    const body = new Blob(chunks);
+    return new Response(body, {
       status: response.status,
       statusText: response.statusText,
       headers: responseHeaders,
