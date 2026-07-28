@@ -30,13 +30,11 @@
 - streetwriters/monograph → 1.3.1
 - streetwriters/cors-proxy still uses :latest (not in compose, no action needed)
 
-## NOT YET DONE (tracked)
-### #105 signup blocker — scope validation error (open upstream, no fix applied yet)
-- `CreateUserAsync` in `UserAccountService.cs` validates the client_id against IdentityServer's in-memory `Clients` list (`Config.Clients`), then creates the user and issues tokens.
-- The "scope validation error" from issue #105 originates from the client sending scopes not in `Config.AllowedScopes` (allowed: `notesnook.sync`, `offline_access`, `openid`, `profile`, `mfa` + local API scope).
-- Possible cause: Android app 3.0.32+ (or a recent token refresh) sends a scope the identity server doesn't recognize — a version skew between client and identity server scope config.
-- IdentityServer's `Config.cs` defines 5 ApiScopes and 1 Client (notesnook) with AllowedScopes = `[notesnook.sync, offline_access, openid, mfa, AspNetCore.Identity.Mongo]`. The `profile` scope is NOT in either ApiScopes or the Client's AllowedScopes — that is very likely the cause. The Notesnook client 3.x probably requests `profile` as part of its OIDC flow, and IdentityServer rejects it as an unknown scope. Fix: add `new ApiScope("profile")` to `Config.ApiScopes` AND `"profile"` to `Config.Clients[0].AllowedScopes`.
-- Needs a real log trace to 100% confirm, but this is the strongest candidate based on code analysis.
+## #105 signup blocker — scope validation error (FIXED in commit 59a8bb9)
+- IdentityServer's `Config.cs` was missing `profile` scope that Notesnook client 3.x requests as part of its OIDC flow.
+- IdentityServer rejected the unknown scope → signup silently fails.
+- Fix applied in commit `59a8bb9`: added `ApiScope("profile")` to Config.ApiScopes AND `"profile"` to Client.AllowedScopes.
+- Verified in source at `Streetwriters.Identity/Config.cs` lines 58 and 85.
 
 ## Reliability assessment (post-fixes)
 - Self-host support: explicit "without support" disclaimer, no docs — unchanged.

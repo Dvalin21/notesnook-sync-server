@@ -196,12 +196,24 @@ Restore from backup needs the reverse process. There is no automatic backup — 
 
 This stack pins images to specific version tags (streetwriters images at a specific
 v1.0-beta.x release, monograph at 1.3.1, Minio at immutable RELEASE timestamps,
-MongoDB at 7.0.12). To update deliberately:
+MongoDB at 8.0.28). To update deliberately:
 
 1. `git pull origin master` in this repo
 2. Check which tags changed (see pin rationale below)
 3. `docker compose pull` to fetch new layers
 4. `docker compose up -d`
+
+### MongoDB 7.0 → 8.0 migration
+MongoDB 8.0 requires a Feature Compatibility Version (FCV) migration:
+1. Before upgrading, set FCV to 7.0: `db.adminCommand({ setFeatureCompatibilityVersion: "7.0" })`
+2. Stop the stack: `docker compose down`
+3. Update the image tag in compose to `mongo:8.0.28`
+4. Start the stack: `docker compose up -d`
+5. Set FCV to 8.0: `db.adminCommand({ setFeatureCompatibilityVersion: "8.0" })`
+
+See `MONGO_UPGRADE.md` (from PR #79 community docs) for the full procedure.
+### MinIO update
+MinIO release tags are immutable timestamps. Updating to `RELEASE.2025-09-07T16-13-09Z` replaces the binary at the same pinned digest. No breaking changes expected.
 
 Pinning means updates are deliberate, not accidental. Each image has a documented
 reason for its pin — see "Image pin rationale" below.
@@ -210,9 +222,9 @@ reason for its pin — see "Image pin rationale" below.
 
 | Image | Current Tag | Pin Reason |
 |---|---|---|
-| `mongo` | `7.0.12` | **Upstream's original pin.** MongoDB 7.0 series pins guard against wire-protocol or auth changes between patch releases. 7.0.12 was upstream's chosen baseline. |
-| `minio/minio` | `RELEASE.2024-07-29T22-14-52Z` | **Upstream's original pin.** Minio release tags are immutable timestamps — same binary, same SHA256 digest, forever. |
-| `minio/mc` | `RELEASE.2024-07-26T13-08-44Z` | **Upstream's original pin.** Same as above — Minio release tags are immutable. |
+| `mongo` | `8.0.28` | **Upgraded from 7.0.12.** MongoDB 7.0→8.0 FCV migration required (see `MONGO_UPGRADE.md`). Silver 4114 has AVX2, satisfies Mongo 8.0 requirement. MongoDB 8.0 is backward-compatible with the 3.6+ wire protocol used by the .NET driver. |
+| `minio/minio` | `RELEASE.2025-09-07T16-13-09Z` | **Updated from RELEASE.2024-07-29T22-14-52Z.** Immutable timestamp tag — same binary, same SHA256 digest forever. |
+| `minio/mc` | `RELEASE.2025-08-13T08-35-41Z` | **Updated from RELEASE.2024-07-26T13-08-44Z.** Same as above — Minio release tags are immutable. |
 | `streetwriters/identity` | `v1.0-beta.32` | **Our pin, replacing `:latest`.** Versioned tag is immutable — `:latest` would drift. Docker Hub API confirmed `v1.0-beta.32` digest == `:latest` digest at pin time. |
 | `streetwriters/notesnook-sync` | `v1.0-beta.32` | Same rationale as identity. |
 | `streetwriters/sse` | `v1.0-beta.32` | Same rationale as identity. |
