@@ -60,7 +60,7 @@ namespace Streetwriters.Data.DbContexts
 
                 using (IClientSessionHandle session = await MongoClient.StartSessionAsync())
                 {
-#if (DEBUG || STAGING)
+#if DEBUG
                     await Parallel.ForEachAsync(_commands, async (c, ct) => await c(session, ct));
 #else
                     await session.WithTransactionAsync(
@@ -72,6 +72,7 @@ namespace Streetwriters.Data.DbContexts
                     );
 #endif
                 }
+                _commands.Clear();
                 return count;
             }
             catch (Exception ex)
