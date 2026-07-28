@@ -1,0 +1,58 @@
+# Notesnook Sync Stack — Internal Reverse Proxy
+# Set SERVER_DOMAIN in .env to your domain (e.g. "example.com").
+# Default "localhost" works for local testing with /etc/hosts entries.
+# Routes by Host header to the correct backend service.
+# TLS is handled by your external proxy — Caddy does plain HTTP internally.
+
+{
+    # Disable automatic HTTPS — we're behind a TLS-terminating proxy
+    auto_https off
+    admin off
+}
+
+:80 {
+    # Caddy health
+    handle /health {
+        respond "Healthy"
+    }
+
+    # Route by Host header
+    @sync host sync.{$DOMAIN}
+    @auth host auth.{$DOMAIN}
+    @sse host sse.{$DOMAIN}
+    @monograph host notes.{$DOMAIN} {$DOMAIN}
+    @attach host attach.{$DOMAIN}
+    @minio host minio.{$DOMAIN}
+    @cors host cors.{$DOMAIN}
+
+    handle @sync {
+        reverse_proxy notesnook-server:5264
+    }
+    handle @auth {
+        reverse_proxy identity-server:8264
+    }
+    handle @sse {
+        reverse_proxy sse-server:7264
+    }
+    handle @monograph {
+        reverse_proxy monograph-server:3000
+    }
+    handle @attach {
+        reverse_proxy notesnook-s3:9000
+    }
+    handle @minio {
+        reverse_proxy notesnook-s3:9090
+    }
+    handle @cors {
+        reverse_proxy cors-proxy:3000
+    }
+
+    # Path-based fallbacks (catch unmatched Host headers)
+    @s3-path path /attachments/* /minio/*
+    handle @s3-path {
+        reverse_proxy notesnook-s3:9000
+    }
+
+    # Default: serve monograph (web client)
+    reverse_proxy monograph-server:3000
+}
