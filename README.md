@@ -2,21 +2,24 @@
 
 Full source for the Notesnook sync backend (Notesnook / Streetwriters). AGPLv3 licensed.
 
-This fork contains operational hardening fixes (CORS env-var, MONGODB_DATABASE_NAME, restart policies, DataProtection key persistence, image pinning). The original upstream README and INSTALL are superseded by this file.
+This fork contains operational hardening fixes (CORS env-var, MONGODB_DATABASE_NAME, restart policies, DataProtection key persistence, image pinning, Caddy reverse proxy, autoheal, cors-proxy). The original upstream README and INSTALL are superseded by this file.
 
 ## What this stack runs (all in Docker)
 
 | Service | Port | Description |
 |---|---|---|
+| caddy | 8080→80 | Internal reverse proxy — routes by Host header to all services |
 | identity-server | 8264 | Authentication & signup |
 | notesnook-server | 5264 | Sync engine |
 | sse-server | 7264 | Server-sent events for real-time sync |
-| monograph-server | 6264 | Web client |
+| monograph-server | 6264→3000 | Web client (published notes viewer) |
+| cors-proxy | — | CORS proxy for web app (fetches external resources) |
 | notesnook-db | — | MongoDB 8.0.28 replica set |
-| notesnook-s3 | — | MinIO S3 storage for attachments (internal only) |
+| notesnook-s3 | 9000 / 9090 | MinIO S3 storage + web console (internal only, reached through Caddy) |
 | setup-s3 | — | One-shot bucket creator (runs once, then stops) |
+| autoheal | — | Restarts any container Docker marks unhealthy |
 
-You still need your own TLS termination in front (Caddy, nginx, Traefik, Cloudflare Tunnel, etc.). The stack speaks plain HTTP internally.
+MinIO ports are NOT exposed to the host. The S3 API (`attach.*`) and web console (`minio.*`) are accessible only through the internal Caddy proxy. Direct API ports (5264, 8264, 7264, 6264) remain exposed for debugging.
 
 ## Quick start (the caveman version)
 
@@ -40,13 +43,17 @@ docker compose logs -f
 curl -fsS http://localhost:5264/health && echo " sync OK"
 curl -fsS http://localhost:8264/health && echo " auth OK"
 curl -fsS http://localhost:7264/health && echo " sse OK"
-curl -fsS http://localhost:3000/api/health && echo " monograph OK"
+curl -fsS http://localhost:6264/api/health && echo " monograph OK"
+curl -fsS http://localhost:8080/health && echo " caddy OK"
 
-# 6. Open monograph in browser (behind YOUR TLS proxy)
+# 6. Verify all containers healthy
+docker compose ps
+
+# 7. Open monograph in browser (behind YOUR TLS proxy)
 #    http://monogr.ph  (or whatever MONOGRAPH_PUBLIC_URL you set)
 ```
 
-That it. If anything fails, `docker compose logs <service name>` shows why.
+That's it. If anything fails, `docker compose logs <service name>` shows why.
 
 ## Settings — what every env var does
 
@@ -67,12 +74,13 @@ Copy `.env` to `.env.local`, never commit `.env.local` to git.
 | `AUTH_SERVER_PUBLIC_URL` | Base URL the Notesnook app uses to reach identity-server | `https://auth.mydomain.com` |
 | `NOTESNOOK_APP_PUBLIC_URL` | Base URL the app uses to reach sync server | `https://sync.mydomain.com` |
 | `MONOGRAPH_PUBLIC_URL` | Base URL for the web client | `https://mydomain.com` |
-| `ATTACHMENTS_SERVER_PUBLIC_URL` | Base URL where S3 attachments are reachable (via your TLS proxy) | `https://attach.mydomain.com` |
+| `ATTACHMENTS_SERVER_PUBLIC_URL` | Base URL where S3 attachments are reachable (via your TLS proxy → Caddy → MinIO) | `https://attach.mydomain.com` |
 
 ### Optional (defaults work for most)
 
 | Variable | Default | What |
 |---|---|---|
+| `SERVER_DOMAIN` | `localhost` | Domain for Caddy hostname-based routing. Match this to your external TLS proxy's routing domain. |
 | `MONGODB_DATABASE_NAME` | `notesnook` | MongoDB database name. Changing it now honors the env var (was hardcoded before). |
 | `NOTESNOOK_CORS_ORIGINS` | *(empty)* | Comma-separated list of allowed browser CORS origins. Leave empty = any origin allowed (fine behind your TLS proxy). |
 | `MINIO_ROOT_USER` | `minioadmin` | MinIO admin user. `minioadmin` default is well-known — change it. |
@@ -88,12 +96,13 @@ Copy `.env` to `.env.local`, never commit `.env.local` to git.
 
 - Docker and Docker Compose v2 on a Linux host.
 - A domain or LAN IP you control. Notesnook clients need fixed URLs.
-- Ports you'll use (you only need to expose these through your TLS proxy, not directly to the internet):
-  - 5264 — sync
-  - 8264 — auth
-  - 7264 — SSE
-  - 6264 — web client
-  - 9000 — MinIO (INTERNAL ONLY, never expose publicly)
+- Ports you'll use (the stack exposes these to the host; your TLS proxy connects to them):
+  - **8080** — Caddy (internal reverse proxy, unified entry point). **Recommended for all external traffic.**
+  - 5264 — sync (direct, for debugging)
+  - 8264 — auth (direct, for debugging)
+  - 7264 — SSE (direct, for debugging)
+  - 6264 — web client (direct, for debugging)
+  - MinIO ports (9000, 9090) are **internal only** — never exposed to the host.
 - Minimum 2 GB RAM, a few GB disk for notes + attachments.
 
 ### Step 1 — get the code
@@ -124,31 +133,45 @@ nano .env.local
 
 Set the Required variables from the table above. The `.env` template has placeholder values — replace every one of them.
 
-Don't expose MinIO port 9000 to the internet. Your TLS proxy reaches it internally via docker network.
+Set `SERVER_DOMAIN` to your domain (e.g., `example.com`). This controls Caddy's hostname routing.
 
-### Step 4 — set up TLS / reverse proxy
+### Step 4 — set up TLS / external reverse proxy
 
-This stack has no built-in TLS. Put something in front. Example Caddy (simplest):
+This stack has Caddy running inside it for internal routing, but it speaks plain HTTP. Put a TLS-terminating proxy in front (Caddy, nginx, Traefik, Cloudflare Tunnel, etc.).
 
+The internal Caddy routes by Host header:
+
+| External URL | Host header | Route to |
+|---|---|---|
+| `https://sync.mydomain.com` | `sync.mydomain.com` | `notesnook-server:5264` |
+| `https://auth.mydomain.com` | `auth.mydomain.com` | `identity-server:8264` |
+| `https://sse.mydomain.com` | `sse.mydomain.com` | `sse-server:7264` |
+| `https://notes.mydomain.com` | `notes.mydomain.com` | `monograph-server:3000` |
+| `https://attach.mydomain.com` | `attach.mydomain.com` | `notesnook-s3:9000` (S3 API) |
+| `https://minio.mydomain.com` | `minio.mydomain.com` | `notesnook-s3:9090` (MinIO console) |
+| `https://cors.mydomain.com` | `cors.mydomain.com` | `cors-proxy:3000` |
+| Any unmatched host | — | `monograph-server:3000` (default) |
+
+Configure your external TLS proxy to forward all these subdomains to `http://<host>:8080` (Caddy's port). Example nginx snippet:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name sync.mydomain.com auth.mydomain.com sse.mydomain.com
+                notes.mydomain.com attach.mydomain.com minio.mydomain.com
+                cors.mydomain.com;
+    ssl_certificate /etc/ssl/certs/mydomain.pem;
+    ssl_certificate_key /etc/ssl/private/mydomain.key;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+    }
+}
 ```
-auth.mydomain.com {
-  reverse_proxy localhost:8264
-}
-sync.mydomain.com {
-  reverse_proxy localhost:5264
-}
-sse.mydomain.com {
-  reverse_proxy localhost:7264
-}
-monogr.ph {
-  reverse_proxy localhost:6264
-}
-attach.mydomain.com {
-  reverse_proxy localhost:9000
-}
-```
 
-Set `AUTH_SERVER_PUBLIC_URL`, `NOTESNOOK_APP_PUBLIC_URL`, `MONOGRAPH_PUBLIC_URL`, `ATTACHMENTS_SERVER_PUBLIC_URL` to match these HTTPS names.
+Set `AUTH_SERVER_PUBLIC_URL`, `NOTESNOOK_APP_PUBLIC_URL`, `MONOGRAPH_PUBLIC_URL`, `ATTACHMENTS_SERVER_PUBLIC_URL` to the HTTPS URLs above.
+
+**Backward-compatible alternative:** If you prefer, you can still point your TLS proxy directly at the individual service ports (5264, 8264, 7264, 6264) — they are still exposed for debugging. MinIO ports (9000, 9090) must go through Caddy.
 
 ### Step 5 — run
 
@@ -165,15 +188,21 @@ Go to your Notesnook client (app or web) → Settings → Sync → "Use custom s
 
 ## What's different in this fork vs upstream
 
-1. CORS env var `NOTESNOOK_CORS_ORIGINS` actually works (upstream read the wrong env key).
-2. `MONGODB_DATABASE_NAME` env var is honored for all 13 collections (was hardcoded to "notesnook" for 7 of them).
-3. All app services have `restart: unless-stopped` (upstream had none — a crash left services permanently down).
-4. `dpdata` volume persists DataProtection keys so container restarts don't invalidate all auth tokens.
-5. `autoheal` removed (unnecessary socket mount, replaced by native restart policies).
-6. MinIO port 9000 not exposed to host (internal only).
-7. All streetwriters images pinned to specific version tags (was `:latest` everywhere).
-8. Monograph / sync / SSE / identity healthchecks use `curl` instead of `wget` (wget missing in monograph image).
-9. `setup-s3` bucket creation is idempotent (`|| true`).
+1. **Caddy reverse proxy** — internal hostname-based routing. Routes all services through a single port (8080). MinIO S3 API and web console are accessible through Caddy without exposing their ports.
+2. **cors-proxy integrated** — built from source, routed through Caddy at `cors.*`.
+3. **autoheal** — restarts any container Docker marks unhealthy. Upstream had it, we removed it, we put it back.
+4. **CORS env var** `NOTESNOOK_CORS_ORIGINS` actually works (upstream read the wrong env key).
+5. `MONGODB_DATABASE_NAME` env var is honored for all 13 collections (was hardcoded to "notesnook" for 7 of them).
+6. All app services have `restart: unless-stopped` (upstream had none — a crash left services permanently down).
+7. `dpdata` volume persists DataProtection keys so container restarts don't invalidate all auth tokens.
+8. MinIO port 9000 not exposed to host (internal only, reached through Caddy).
+9. MinIO web console (port 9090) accessible through Caddy at `minio.*`.
+10. All streetwriters images pinned to specific version tags (was `:latest` everywhere).
+11. Healthchecks use `wget` for .NET images (notesnook, sse, identity) and `bun` for monograph (these images don't have curl/wget). `[::1]` fixed to `127.0.0.1` for monograph (IPv6-only healthcheck silently failed).
+12. `setup-s3` bucket creation is idempotent (`|| true`).
+13. Resource limits (CPU/memory) on all services.
+14. Monograph `HOST: "0.0.0.0"` — Bun resolves `localhost` to IPv6 `::1`, which Docker port mapping can't reach; fixed to bind all interfaces.
+15. Network isolation — `notesnook-s3` is on the `notesnook` network (was on default, unreachable from setup-s3).
 
 ## Migrating from MinIO to Garage S3
 
@@ -191,6 +220,8 @@ replacement for attachment storage.
 | Bucket setup | `mc mb` (MinIO client) | `setup-garage.sh` (S3 PUT with SigV4) |
 | `S3_INTERNAL_SERVICE_URL` | `http://notesnook-s3:9000` | `http://garage:3900` |
 | `S3_ACCESS_KEY_ID` / `S3_ACCESS_KEY` | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `GARAGE_ACCESS_KEY_ID` / `GARAGE_ACCESS_KEY_SECRET` |
+| Caddy route for S3 | `attach.*` → `notesnook-s3:9000` | (same — `attach.*` → `garage:3900` with overlay) |
+| Caddy route for console | `minio.*` → `notesnook-s3:9090` | `minio.*` → `garage:3903` |
 
 ### How to migrate
 
@@ -224,7 +255,7 @@ replacement for attachment storage.
    ```
 
 5. **Update `ATTACHMENTS_SERVER_PUBLIC_URL`** to point at your TLS proxy in front of
-   Garage (port 3900 internally).
+   Caddy (which routes `attach.*` to Garage port 3900).
 
 6. **Stop and remove the old MinIO stack:**
 
@@ -252,6 +283,7 @@ to the node's reachable address.
 - Garage does not ship an `mc`-equivalent CLI — bucket creation uses the S3 PUT API
   (see `setup-garage.sh`).
 - Monograph PDF viewing has pre-existing issues unrelated to the S3 backend.
+- The Caddy overlay for Garage must route `attach.*` to `garage:3900` and `minio.*` to `garage:3903`.
 
 ## Troubleshooting
 
@@ -262,6 +294,9 @@ to the node's reachable address.
 | Sync works but web client blank | `MONOGRAPH_PUBLIC_URL` wrong or CORS blocking | Set `MONOGRAPH_PUBLIC_URL` to match your browser URL exactly |
 | Attachments 404 | `ATTACHMENTS_SERVER_PUBLIC_URL` wrong | Must point at the same host the presigned URL uses |
 | Tokens invalidated after restart | DataProtection keys not persisted | `dpdata` volume missing or wrong mount path |
+| Container stays "unhealthy" | Healthcheck misconfigured | Check `docker compose logs <service>` — likely `curl` vs `wget` mismatch |
+| Container "unhealthy" but never restarts | autoheal not running | Check `docker compose ps autoheal` — should show "(healthy)" |
+| Caddy returns "Healthy" but routes fail | Caddyfile issue | Check `Caddyfile` syntax and `SERVER_DOMAIN` env var |
 | Notes disappearing | Sync conflict, not server bug | Export your notes regularly (see backup below) |
 
 ## Backup (you need this or you will lose data)
@@ -322,6 +357,9 @@ reason for its pin — see "Image pin rationale" below.
 | `streetwriters/notesnook-sync` | `v1.0-beta.32` | Same rationale as identity. |
 | `streetwriters/sse` | `v1.0-beta.32` | Same rationale as identity. |
 | `streetwriters/monograph` | `1.3.1` | **Our pin, replacing `:latest`.** Monograph uses explicit version tags; `1.3.1` is stable and will not mutate. Docker Hub API confirmed same digest as `:latest` at pin time. |
+| `caddy` | `alpine` | Official Caddy image. Alpine-based, ~35 MB. Internal routing only (TLS at external proxy). |
+| `cors-proxy` | *(build from source)* | Built from `./cors-proxy/Dockerfile`. SSRF-protected, size-limited CORS proxy for the web app. |
+| `willfarrell/autoheal` | `latest` | Watches Docker events, restarts unhealthy containers. Needed because `restart: unless-stopped` only handles crashes, not health failures. |
 | `vandot/alpine-bash` | *(none — `:latest` implied)* | **Intentional, low risk.** One-shot utility image (`restart: "no"`) used only by the `validate` service to check env vars before the stack starts. Runs once and exits; no persistent state. `:latest` drift here has zero operational impact. |
 
 ## Known issues (upstream, not fixed in this fork)
