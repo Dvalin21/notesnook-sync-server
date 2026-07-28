@@ -48,3 +48,41 @@
 - Minio not exposed on host — only reachable through compose network / TLS proxy.
 
 ## Files changed: 3 (+1 dpdata volume added to volumes section)
+
+## Garage S3 migration (garage-migration branch)
+
+### New files
+- `examples/garage/docker-compose.garage.yml` — Docker Compose overlay that replaces
+  the MinIO `notesnook-s3` service with a `garage` service (image `dxflrs/garage:v2.1.0`),
+  replaces the `setup-s3` one-shot with `setup-garage` (curl-based S3 PUT bucket creation),
+  and overrides `notesnook-server` environment to point at `http://garage:3900`.
+- `examples/garage/garage.toml` — Garage configuration (S3 API on 3900, RPC on 3901,
+  web on 3902, admin on 3903). Single-node: replication_factor=1.
+- `examples/garage/setup-garage.sh` — Fixed bucket creation script with proper AWS
+  SigV4 signing (the original had a fake/dummy Authorization header that would never
+  authenticate).
+- `MONGO_UPGRADE.md` — Full MongoDB 7.0 → 8.0 FCV migration procedure (was referenced
+  in README but missing from the repo).
+
+### README.md updates
+- Fixed all table rows: `||` (double pipe) at line start replaced with `|` (single pipe)
+  across 4 tables (Required env vars, Optional env vars, Troubleshooting, Image pin rationale).
+- Added "Migrating from MinIO to Garage S3" section with comparison table, step-by-step
+  migration, and compatibility notes.
+- Added Garage backup instructions to the Backup section.
+- Updated Image pin rationale table: MinIO entries now note Garage as replacement;
+  added `dxflrs/garage:v2.1.0` entry.
+
+### docker-compose.garage.yml details
+- `garage` service: binds S3 API on 3900, mounts `garage.toml` config, `garage-meta`
+  volume for metadata, healthcheck on admin API port 3903.
+- `setup-garage` service: uses `curlimages/curl:latest` (no MinIO mc dependency),
+  waits for Garage health, creates bucket via S3 PUT with SigV4.
+- `notesnook-server` override: `S3_INTERNAL_SERVICE_URL` → `http://garage:3900`,
+  credentials from `GARAGE_ACCESS_KEY_ID` / `GARAGE_ACCESS_KEY_SECRET`.
+
+### Compatibility verified
+- Garage uses S3 API v4 signatures — compatible with .NET AWS SDK used by sync server.
+- `forcePathStyle=true` works with Garage.
+- Garage does not ship an mc-equivalent — bucket creation via S3 PUT API.
+- Monograph PDF viewing has pre-existing issues unrelated to S3 backend.
