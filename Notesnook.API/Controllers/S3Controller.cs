@@ -102,10 +102,9 @@ namespace Notesnook.API.Controllers
         {
             var url = await s3Service.GetInternalUploadObjectUrlAsync(userId, name) ?? throw new Exception("Could not create signed url.");
 
-            var httpClient = new HttpClient();
             var content = new StreamContent(HttpContext.Request.BodyReader.AsStream());
             content.Headers.ContentLength = fileSize;
-            var response = await httpClient.SendRequestAsync<Response>(url, null, HttpMethod.Put, content);
+            var response = await S3Service.HttpClient.SendRequestAsync<Response>(url, null, HttpMethod.Put, content);
             if (!response.Success) throw new Exception(response.Content != null ? await response.Content.ReadAsStringAsync() : "Could not upload file.");
 
             return await s3Service.GetObjectSizeAsync(userId, name);
