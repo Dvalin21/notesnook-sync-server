@@ -6,7 +6,7 @@ replication_factor = 1
 consistency_mode = "consistent"
 
 rpc_bind_addr = "[::]:3901"
-rpc_public_addr = "127.0.0.1:3901"
+rpc_public_addr = "0.0.0.0:3901"
 
 [s3_api]
 s3_region = "us-east-1"
