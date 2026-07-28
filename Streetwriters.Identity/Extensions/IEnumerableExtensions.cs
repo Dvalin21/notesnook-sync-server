@@ -27,7 +27,7 @@ using Streetwriters.Identity.Controllers;
 
 namespace System.Collections.Generic
 {
-    public static class IEnumberableExtensions
+    public static class IEnumerableExtensions
     {
         public static IEnumerable<string> ToErrors(this IEnumerable<IdentityError> collection)
         {

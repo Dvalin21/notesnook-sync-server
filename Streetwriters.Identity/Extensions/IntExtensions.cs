@@ -18,8 +18,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 using System;
-using System.Text;
-using Ng.Services;
 
 namespace System
 {
@@ -27,7 +25,6 @@ namespace System
     {
         public static string Pluralize(this int value, string singular, string plural)
         {
-            // if (value == null) return $"0 {plural}";
             return value == 1 ? $"{value} {singular}" : $"{value} {plural}";
         }
     }

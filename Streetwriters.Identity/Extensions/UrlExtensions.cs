@@ -21,6 +21,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.WebUtilities;
 using Streetwriters.Common;
 using Streetwriters.Identity.Controllers;
 using Streetwriters.Identity.Enums;
@@ -37,11 +38,20 @@ namespace Streetwriters.Identity.Extensions
             url.Port = Servers.IdentityServer.Port;
             url.Scheme = "http";
 #else
-            url.Host = Servers.IdentityServer.PublicURL.Host;
-            url.Scheme = Servers.IdentityServer.PublicURL.Scheme;
+            var publicUrl = Servers.IdentityServer.PublicURL;
+            if (publicUrl == null) return null;
+            url.Host = publicUrl.Host;
+            url.Scheme = publicUrl.Scheme;
+            url.Port = publicUrl.Port;
 #endif
             url.Path = "account/confirm";
-            url.Query = $"userId={Uri.EscapeDataString(userId)}&code={Uri.EscapeDataString(code)}&clientId={Uri.EscapeDataString(clientId)}&type={Uri.EscapeDataString(type.ToString())}";
+            url.Query = QueryHelpers.AddQueryString("", new Dictionary<string, string?>
+            {
+                ["userId"] = userId,
+                ["code"] = code,
+                ["clientId"] = clientId,
+                ["type"] = type.ToString()
+            }).TrimStart('?');
             return url.ToString();
         }
     }
