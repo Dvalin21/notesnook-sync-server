@@ -66,7 +66,7 @@ Copy `.env` to `.env.local`, never commit `.env.local` to git.
 | `SMTP_FROM_NAME` | Sender name in emails | `My Notesnook` |
 | `AUTH_SERVER_PUBLIC_URL` | Base URL the Notesnook app uses to reach identity-server | `https://auth.mydomain.com` |
 | `NOTESNOOK_APP_PUBLIC_URL` | Base URL the app uses to reach sync server | `https://sync.mydomain.com` |
-| `MONOGRAPH_PUBLIC_URL` | Base URL for the web client | `https://mydomain.com` |
+| `MONOGRAPH_PUBLIC_URL` | Base URL for the web client | `https://monogr.mydomain.com` |
 | `ATTACHMENTS_SERVER_PUBLIC_URL` | Base URL where S3 attachments are reachable (via your TLS proxy) | `https://attach.mydomain.com` |
 
 ### Optional (defaults work for most)
