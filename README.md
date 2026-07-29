@@ -4,6 +4,8 @@ Full source for the Notesnook sync backend (Notesnook / Streetwriters). AGPLv3 l
 
 This fork contains operational hardening fixes (CORS env-var, MONGODB_DATABASE_NAME, restart policies, DataProtection key persistence, image pinning, Caddy reverse proxy, autoheal, cors-proxy). The original upstream README and INSTALL are superseded by this file.
 
+**This branch uses MinIO** as the default object storage backend. If you want the Garage S3 backend, see the `garage-migration` branch.
+
 ## What this stack runs (all in Docker)
 
 | Service | Port | Description |
@@ -85,9 +87,6 @@ Copy `.env` to `.env.local`, never commit `.env.local` to git.
 | `NOTESNOOK_CORS_ORIGINS` | *(empty)* | Comma-separated list of allowed browser CORS origins. Leave empty = any origin allowed (fine behind your TLS proxy). |
 | `MINIO_ROOT_USER` | `minioadmin` | MinIO admin user. `minioadmin` default is well-known — change it. |
 | `MINIO_ROOT_PASSWORD` | `minioadmin` | MinIO admin password. Same warning. |
-| `GARAGE_ACCESS_KEY_ID` | *(empty)* | Garage S3 access key (required only when using Garage overlay). |
-| `GARAGE_ACCESS_KEY_SECRET` | *(empty)* | Garage S3 secret key (required only when using Garage overlay). |
-| `GARAGE_RPC_SECRET` | *(empty)* | Garage RPC secret for inter-node communication (required for multi-node). |
 | `IS_SELF_HOSTED` | *(auto)* | Set automatically based on `AUTH_SERVER_PUBLIC_URL` format. Don't touch unless you know why. |
 
 ## How to install — full step by step
@@ -204,86 +203,12 @@ Go to your Notesnook client (app or web) → Settings → Sync → "Use custom s
 14. Monograph `HOST: "0.0.0.0"` — Bun resolves `localhost` to IPv6 `::1`, which Docker port mapping can't reach; fixed to bind all interfaces.
 15. Network isolation — `notesnook-s3` is on the `notesnook` network (was on default, unreachable from setup-s3).
 
-## Migrating from MinIO to Garage S3
+## Switching to Garage S3
 
-MinIO is ending active community development for the self-hosted edition. Garage is a
-self-hosted S3-compatible object storage engine (written in Go) that is a drop-in
-replacement for attachment storage.
-
-### What changes
-
-| Component | MinIO (default) | Garage (overlay) |
-|---|---|---|
-| Image | `minio/minio:RELEASE.2025-09-07T16-13-09Z` | `dxflrs/garage:v2.1.0` |
-| S3 API port | 9000 | 3900 |
-| Admin API port | 9090 (console) | 3903 |
-| Bucket setup | `mc mb` (MinIO client) | `setup-garage.sh` (S3 PUT with SigV4) |
-| `S3_INTERNAL_SERVICE_URL` | `http://notesnook-s3:9000` | `http://garage:3900` |
-| `S3_ACCESS_KEY_ID` / `S3_ACCESS_KEY` | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `GARAGE_ACCESS_KEY_ID` / `GARAGE_ACCESS_KEY_SECRET` |
-| Caddy route for S3 | `attach.*` → `notesnook-s3:9000` | (same — `attach.*` → `garage:3900` with overlay) |
-| Caddy route for console | `minio.*` → `notesnook-s3:9090` | `minio.*` → `garage:3903` |
-
-### How to migrate
-
-1. **Add Garage env vars to `.env.local`:**
-
-   ```bash
-   GARAGE_RPC_SECRET=$(openssl rand -base64 32)
-   GARAGE_ACCESS_KEY_ID=$(openssl rand -base64 12)
-   GARAGE_ACCESS_KEY_SECRET=$(openssl rand -base64 24)
-   ```
-
-2. **Start the stack with the Garage overlay:**
-
-   ```bash
-   docker compose -f docker-compose.yml -f examples/garage/docker-compose.garage.yml up -d
-   ```
-
-3. **Run the bucket setup script (once):**
-
-   ```bash
-   GARAGE_ACCESS_KEY_ID=<your-key> GARAGE_ACCESS_KEY_SECRET=<your-secret> \
-     bash examples/garage/setup-garage.sh
-   ```
-
-4. **Migrate existing attachments (if any):**
-
-   ```bash
-   # Copy from old MinIO volume to new Garage volume
-   docker run --rm -v notesnook-sync-server_s3data:/src -v notesnook-sync-server_garage-data:/dst \
-     alpine sh -c "cp -a /src/. /dst/"
-   ```
-
-5. **Update `ATTACHMENTS_SERVER_PUBLIC_URL`** to point at your TLS proxy in front of
-   Caddy (which routes `attach.*` to Garage port 3900).
-
-6. **Stop and remove the old MinIO stack:**
-
-   ```bash
-   docker compose down
-   docker compose -f docker-compose.yml -f examples/garage/docker-compose.garage.yml up -d
-   ```
-
-### Garage configuration
-
-The Garage config file lives at `examples/garage/garage.toml`. It binds:
-- S3 API on port 3900
-- RPC on port 3901
-- Web UI on port 3902
-- Admin API on port 3903
-
-For single-node deployments, `replication_factor = 1` and `consistency_mode = "consistent"`
-are sufficient. For multi-node, increase the replication factor and set `rpc_public_addr`
-to the node's reachable address.
-
-### Compatibility notes
-
-- Garage uses S3 API v4 signatures — compatible with the .NET AWS SDK used by the sync server.
-- `forcePathStyle=true` (set in the sync server) works with Garage.
-- Garage does not ship an `mc`-equivalent CLI — bucket creation uses the S3 PUT API
-  (see `setup-garage.sh`).
-- Monograph PDF viewing has pre-existing issues unrelated to the S3 backend.
-- The Caddy overlay for Garage must route `attach.*` to `garage:3900` and `minio.*` to `garage:3903`.
+See the `garage-migration` branch for Garage S3 as the object storage backend.
+Garage replaces MinIO with a lighter, distroless S3 engine, inlined into the
+base compose with automated first-run setup via admin API. The `garage-migration`
+branch has full documentation and a verified test suite (59/59 tests passing).
 
 ## Troubleshooting
 
@@ -305,13 +230,8 @@ to the node's reachable address.
 # MongoDB backup
 docker compose exec notesnook-db mongodump --uri="mongodb://localhost:27017/notesnook" --archive=/backup/notesnook-$(date +%Y%m%d).archive
 
-# MinIO attachments backup (default stack)
+# MinIO attachments backup
 docker compose exec notesnook-s3 mc mirror /data/s3 /backup/s3
-
-# Garage attachments backup (Garage overlay)
-# Garage stores data in /var/lib/garage/data — copy the volume
-docker run --rm -v notesnook-sync-server_s3data:/src -v /backup/garage:/dst \
-  alpine sh -c "cp -a /src/. /dst/"
 ```
 
 Restore from backup needs the reverse process. There is no automatic backup — you run it or you lose notes.
@@ -350,9 +270,8 @@ reason for its pin — see "Image pin rationale" below.
 | Image | Current Tag | Pin Reason |
 |---|---|---|
 | `mongo` | `8.0.28` | **Upgraded from 7.0.12.** MongoDB 7.0→8.0 FCV migration required (see `MONGO_UPGRADE.md`). Silver 4114 has AVX2, satisfies Mongo 8.0 requirement. MongoDB 8.0 is backward-compatible with the 3.6+ wire protocol used by the .NET driver. |
-| `minio/minio` | `RELEASE.2025-09-07T16-13-09Z` | **Default S3 backend.** Immutable timestamp tag — same binary, same SHA256 digest forever. Can be replaced by Garage via overlay (see "Migrating from MinIO to Garage S3" above). |
-| `minio/mc` | `RELEASE.2025-08-13T08-35-41Z` | **Default bucket setup tool.** Only used by `setup-s3` one-shot service. Replaced by `setup-garage.sh` when using Garage overlay. |
-| `dxflrs/garage` | `v2.1.0` | **Alternative S3 backend (overlay only).** Pinned to v2.1.0 for stability. See `examples/garage/docker-compose.garage.yml`. |
+| `minio/minio` | `RELEASE.2025-09-07T16-13-09Z` | **Default S3 backend.** Immutable timestamp tag — same binary, same SHA256 digest forever. |
+| `minio/mc` | `RELEASE.2025-08-13T08-35-41Z` | **Default bucket setup tool.** Only used by `setup-s3` one-shot service. |
 | `streetwriters/identity` | `v1.0-beta.32` | **Our pin, replacing `:latest`.** Versioned tag is immutable — `:latest` would drift. Docker Hub API confirmed `v1.0-beta.32` digest == `:latest` digest at pin time. |
 | `streetwriters/notesnook-sync` | `v1.0-beta.32` | Same rationale as identity. |
 | `streetwriters/sse` | `v1.0-beta.32` | Same rationale as identity. |
