@@ -67,7 +67,7 @@ EOF
     restart: unless-stopped
     volumes:
       - dbdata:/data/db
-    # dpdata intentionally NOT mounted here — MongoDB does not use ASP.NET DataProtection
+      - dpdata:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     command: --replSet rs0 --bind_ip_all
@@ -326,6 +326,17 @@ EOF
         reservations:
           cpus: "0.1"
           memory: 32M
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: always
+    tty: true
+    environment:
+      AUTOHEAL_INTERVAL: 60
+      AUTOHEAL_START_PERIOD: 300
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 networks:
   notesnook:
