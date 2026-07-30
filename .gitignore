@@ -260,8 +260,12 @@ paket-files/
 __pycache__/
 *.pyc
 
+# Secrets — never commit .env files
+.env
+.env.local
+.env.*
+
 keys/
 dist/
 keystore/
-.env.local
 Notesnook.API/sync/
