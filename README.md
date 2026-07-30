@@ -38,21 +38,11 @@ Your external proxy terminates TLS.
    - `DISABLE_SIGNUPS=true` until finished testing
    - `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` + strong new passwords
 
-3. Create DNS `A` records that point to this host:
 
-       sync.example.com     -> this host
-       auth.example.com     -> this host
-       sse.example.com      -> this host
-       notes.example.com    -> this host
-       example.com          -> this host
-       attach.example.com   -> this host
-       minio.example.com    -> this host
-       cors.example.com     -> this host
-
-4. Configure your TLS proxy / reverse proxy to forward **all** of these
+3. Configure your TLS proxy / reverse proxy to forward **all** of these
    `Host:` headers to `http://<this-host-ip>:8080`.
 
-5. Start the stack.
+4. Start the stack.
 
        docker compose pull
        docker compose up -d
