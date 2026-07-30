@@ -8,20 +8,22 @@ The original upstream README and INSTALL are superseded by this file.
 
 ## What this stack runs (all in Docker)
 
-| Service | Compose name | Port | Description |
+| Service | Compose name | Internal port | Published via Caddy Host header |
 |---|---|---|---|
-| identity-server | `identity-server` | 8264 | Authentication, signup, token endpoint |
-| notesnook-server | `notesnook-server` | 5264 | API backend, notes CRUD, sync hooks |
-| sse-server | `sse-server` | 7264 | Server-sent events for real-time inbox/device sync |
-| monograph-server | `monograph-server` | 6264 | Web client (Monograph) |
-| notesnook-db | `notesnook-db` | 27017 internal only | MongoDB 8.0.28 |
-| notesnook-s3 | `notesnook-s3` | 9000 internal only | MinIO S3 storage for attachments |
-| cors-proxy | `cors-proxy` | 3000 internal only | CORS preflight pass-through |
-| caddy | `caddy` | 8080 internal / your TLS front | Internal reverse proxy by Host header |
-| autoheal | `autoheal` | — | Container monitor; restarts unhealthy containers |
+| identity-server | `identity-server` | 8264 | `https://auth.<SERVER_DOMAIN>` |
+| notesnook-server | `notesnook-server` | 5264 | `https://sync.<SERVER_DOMAIN>` |
+| sse-server | `sse-server` | 7264 | `https://sse.<SERVER_DOMAIN>` |
+| monograph-server | `monograph-server` | 6264 | `https://notes.<SERVER_DOMAIN>` / `https://<SERVER_DOMAIN>` |
+| notesnook-db | `notesnook-db` | 27017 internal only | not exposed |
+| notesnook-s3 | `notesnook-s3` | 9000 + 9090 internal | `https://attach.<SERVER_DOMAIN>` (S3) / `https://minio.<SERVER_DOMAIN>` (console) |
+| cors-proxy | `cors-proxy` | 3000 internal | `https://cors.<SERVER_DOMAIN>` |
+| caddy | `caddy` | 8080 internal / your TLS front | Host-header router |
+| autoheal | `autoheal` | — | Container monitor |
 
-You still need your own TLS termination in front (Caddy, nginx, Traefik, Cloudflare Tunnel,
-etc.). The stack speaks plain HTTP internally.
+Caddy listens on `:80` inside the stack. The host maps one port to Caddy:
+- `<HOST_IP>:8080` → Caddy `:80` → routes by Host header to all backends.
+
+TLS termination is in front of Caddy on 8080. The stack itself is plain HTTP.
 
 ## Prerequisites
 
@@ -67,17 +69,17 @@ Copy `.env` to `.env.local`. Never commit `.env.local`. Placeholders marked
 | `SERVER_DOMAIN` | Base domain used by Caddyfile routing | `example.com` |
 | `NOTESNOOK_API_SECRET` | Internal API signing secret | openssl rand -base64 48 |
 | `DISABLE_SIGNUPS` | `true` = closed registration; `false` = open | `true` |
-| `SMTP_HOST` | Outgoing mail host for invites/notifications | `smtp.example.com` |
+| `SMTP_HOST` | Outgoing mail host | `smtp.example.com` |
 | `SMTP_PORT` | Outgoing mail port | `587` |
 | `SMTP_USERNAME` | SMTP login | `alerts@example.com` |
-| `SMTP_PASSWORD` | SMTP password | `changeme` |
-| `SMTP_FROM_NAME` | Sender name in messages | `My Notesnook` |
-| `AUTH_SERVER_PUBLIC_URL` | URL the Notesnook Android client uses for auth/identity | `https://auth.example.com` |
-| `NOTESNOOK_APP_PUBLIC_URL` | URL the Notesnook Android client uses for sync API | `https://sync.example.com` |
-| `MONOGRAPH_PUBLIC_URL` | URL for the web client (Monograph) | `https://notes.example.com` |
-| `ATTACHMENTS_SERVER_PUBLIC_URL` | URL clients use for attachment upload/download | `https://attach.example.com` |
-| `MINIO_ROOT_USER` | MinIO admin login _and_ the S3 credential the stack uses internally | `minioadmin` → CHANGE |
-| `MINIO_ROOT_PASSWORD` | MinIO admin password _and_ the matching S3 secret | openssl rand -base64 22 |
+| `SMTP_PASSWORD` | SMTP password | strong-random-secret |
+| `SMTP_FROM_NAME` | Sender name in messages | `Notesnook` |
+| `AUTH_SERVER_PUBLIC_URL` | Android client auth URL → `https://auth.<SERVER_DOMAIN>` | `https://auth.example.com` |
+| `NOTESNOOK_APP_PUBLIC_URL` | Android client sync URL → `https://sync.<SERVER_DOMAIN>` | `https://sync.example.com` |
+| `MONOGRAPH_PUBLIC_URL` | Web client URL → `https://notes.<SERVER_DOMAIN>` | `https://notes.example.com` |
+| `ATTACHMENTS_SERVER_PUBLIC_URL` | Attachment URL → `https://attach.<SERVER_DOMAIN>` | `https://attach.example.com` |
+| `MINIO_ROOT_USER` | MinIO admin login _and_ internal S3 credential username | strong-random-user |
+| `MINIO_ROOT_PASSWORD` | MinIO admin password _and_ internal S3 credential secret | openssl rand -base64 22 |
 | `SELF_HOSTED` | Set to `1` to enable self-hosted behavior | `1` |
 
 ### Optional
@@ -97,9 +99,12 @@ In the Notesnook Android app → Settings → Sync → "Use custom server":
 
 | Field | Value |
 |---|---|
-| Auth URL | `https://<AUTH_SERVER_PUBLIC_URL>` |
-| Sync URL | `https://<NOTESNOOK_APP_PUBLIC_URL>` |
-| Attachments URL | `https://<ATTACHMENTS_SERVER_PUBLIC_URL>` |
+| Auth URL | `https://auth.<SERVER_DOMAIN>` |
+| Sync URL | `https://sync.<SERVER_DOMAIN>` |
+| Attachments URL | `https://attach.<SERVER_DOMAIN>` |
+
+These match the `AUTH_SERVER_PUBLIC_URL`, `NOTESNOOK_APP_PUBLIC_URL`, and
+`ATTACHMENTS_SERVER_PUBLIC_URL` values in `.env`.
 
 The app uses OAuth2 password grant against the identity server, then authenticates
 all API and SignalR sync requests with the returned bearer token.
@@ -110,38 +115,46 @@ There is no legacy HTTP `/sync` endpoint.
 
 ### Web client (Monograph)
 
-Open `https://<MONOGRAPH_PUBLIC_URL>` in a browser. It is served by the
-`monograph-server` container and routed by your TLS proxy.
+Open `https://notes.<SERVER_DOMAIN>` or `https://<SERVER_DOMAIN>` in a browser.
+Served by `monograph-server` and routed via `MONOGRAPH_PUBLIC_URL` in `.env`.
 
 ## MinIO admin login
 
-MinIO is the object store for attachments only. It is not the user-facing login
-system.
+MinIO is the object store for attachments. Credentials are separate from Notesnook
+user accounts.
 
-- Console: `https://<attach.example.com>` should be routed to the MinIO web UI
-  port 9090 internally by Caddy.
-- Username: the value of `MINIO_ROOT_USER` in `.env`.
-- Password: the value of `MINIO_ROOT_PASSWORD` in `.env`.
+- Console URL: `https://minio.<SERVER_DOMAIN>` → Caddy routes this to
+  `notesnook-s3:9090` inside the stack.
+- S3 API URL: `https://attach.<SERVER_DOMAIN>` → Caddy routes this to
+  `notesnook-s3:9000` inside the stack.
 
-Caddy routes:
-- `attach.<SERVER_DOMAIN>` → MinIO S3 API on port 9000
-- `attach.<SERVER_DOMAIN>` also proxies the MinIO console on port 9090
+Username: the value of `MINIO_ROOT_USER` in `.env`.
+Password: the value of `MINIO_ROOT_PASSWORD` in `.env`.
 
 `setup-s3` creates the `attachments` bucket automatically on first boot.
 
 ## Caddy internal routing
 
-Caddy listens on port 80 internally. It routes by Host header:
+Caddy listens on `:80` inside the stack. The host publishes one mapping:
+- `10.0.0.241:8080` → Caddy `:80`
 
+Routes are by Host header, with `{$DOMAIN}` replaced by `SERVER_DOMAIN` from `.env`:
+
+| Host header | Backend |
+|---|---|
 | Host header | Backend |
 |---|---|
 | `sync.<SERVER_DOMAIN>` | notesnook-server:5264 |
 | `auth.<SERVER_DOMAIN>` | identity-server:8264 |
 | `sse.<SERVER_DOMAIN>` | sse-server:7264 |
-| `notes.<SERVER_DOMAIN>` or `<SERVER_DOMAIN>` | monograph-server:3000 |
-| `attach.<SERVER_DOMAIN>` | notesnook-s3:9000 (S3) and 9090 (MinIO console) |
+| `notes.<SERVER_DOMAIN>` / `<SERVER_DOMAIN>` | monograph-server:3000 |
+| `attach.<SERVER_DOMAIN>` | notesnook-s3:9000 S3 API |
+| `minio.<SERVER_DOMAIN>` | notesnook-s3:9090 MinIO web console |
 | `cors.<SERVER_DOMAIN>` | cors-proxy:3000 |
 | `/attachments/*`, `/minio/*` path fallback | notesnook-s3:9000 |
+| anything else | monograph-server:3000 |
+
+If you add new subdomains, add matching `host` matchers in `Caddyfile`.
 
 ## DataProtection key persistence
 
@@ -168,15 +181,13 @@ have no restart policy. One-shot services (`validate`, `setup-s3`) use `restart:
 
 ## What is different in this fork
 
-1. S3 backend is MinIO only. Garage/S3 overlay and Garage migration tooling were
-   removed from the branch.
-2. `MONGODB_DATABASE_NAME` is honored by all repositories (was hardcoded for some).
-3. `NOTESNOOK_CORS_ORIGINS` env var is wired correctly (upstream read the wrong key).
-4. Missing OAuth `profile` scope added in Identity Config to fix signup validation errors.
-5. DataProtection uses per-service volumes instead of one shared `dpdata` volume.
-6. MongoDB is not exposed on a host port; reachable only inside the Docker network.
-7. Healthchecks use `nc`/`node`/`bun` rather than `wget`.
-8. All streetwriters images pinned to `v1.0-beta.32`; monograph to `1.3.1`;
+1. `MONGODB_DATABASE_NAME` is honored by all repositories (was hardcoded for some).
+2. `NOTESNOOK_CORS_ORIGINS` env var is wired correctly (upstream read the wrong key).
+3. Missing OAuth `profile` scope added in Identity Config to fix signup validation errors.
+4. DataProtection uses per-service volumes instead of one shared `dpdata` volume.
+5. MongoDB is not exposed on a host port; reachable only inside the Docker network.
+6. Healthchecks use `nc`/`node`/`bun` rather than `wget`.
+7. All streetwriters images pinned to `v1.0-beta.32`; monograph to `1.3.1`;
    MinIO to immutable timestamp tags; MongoDB at `8.0.28`.
 
 ## Backup
