@@ -20,7 +20,6 @@ services:
     command:
       - -c
       - |
-        # List of required environment variables
         required_vars=(
           "INSTANCE_NAME"
           "NOTESNOOK_API_SECRET"
@@ -31,7 +30,6 @@ services:
           "ATTACHMENTS_SERVER_PUBLIC_URL"
         )
 
-        # Check each required environment variable
         for var in "$${required_vars[@]}"; do
           if [ -z "$${!var}" ]; then
             echo "Error: Required environment variable $$var is not set."
@@ -41,33 +39,16 @@ services:
 
         echo "All required environment variables are set."
 
-        # SMTP warning (non-blocking)
         if [ -z "$$SMTP_HOST" ] || [ -z "$$SMTP_PORT" ] || [ -z "$$SMTP_USERNAME" ] || [ -z "$$SMTP_PASSWORD" ]; then
-          cat <<'EOF'
-
-        ================================================================================
-         WARNING: SMTP IS NOT CONFIGURED
-        ================================================================================
-         Email 2FA codes and password-reset emails will NOT be sent.
-
-         New users must switch 2FA to an Authenticator app:
-           Settings > Auth > Change 2FA method
-
-         Set SMTP_* in .env if you need email-based 2FA or password reset.
-        ================================================================================
-
-EOF
+          printf '\n  ================================================================================\n  WARNING: SMTP IS NOT CONFIGURED\n  ================================================================================\n  Email 2FA codes and password-reset emails will NOT be sent.\n\n  Newly created users MUST switch 2FA to an Authenticator app:\n    Settings > Auth > Change 2FA method\n\n  Configure SMTP_* in .env if you need email-based 2FA or password reset.\n  ================================================================================\n\n'
         fi
-    # Ensure the validate service runs first
     restart: "no"
 
   notesnook-db:
     image: mongo:8.0.28
     hostname: notesnook-db
-    restart: unless-stopped
     volumes:
       - dbdata:/data/db
-      - dpdata:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     command: --replSet rs0 --bind_ip_all
@@ -91,9 +72,6 @@ EOF
 
   notesnook-s3:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    restart: unless-stopped
-    # Expose S3 API for direct local access. Remove for production
-    # and route through Caddy behind your TLS proxy instead.
     ports:
       - 9000:9000
     volumes:
@@ -123,7 +101,7 @@ EOF
           memory: 256M
 
   # There's no way to specify a default bucket in Minio so we have to
-  # set it up ourselves. Uses the same minio image so no extra dependency.
+  # set it up ourselves.
   setup-s3:
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     restart: "no"
@@ -143,11 +121,10 @@ EOF
 
   identity-server:
     image: streetwriters/identity:v1.0-beta.32
-    restart: unless-stopped
     ports:
       - 8264:8264
     volumes:
-      - dpdata:/app/.aspnet/DataProtection-Keys
+      - dpdata-identity:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
@@ -158,7 +135,7 @@ EOF
       MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replSet=rs0
       MONGODB_DATABASE_NAME: identity
     healthcheck:
-      test: ["CMD", "wget", "--tries=1", "-nv", "-q", "http://localhost:8264/health", "-O-"]
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8264"]
       interval: 40s
       timeout: 30s
       retries: 3
@@ -174,11 +151,10 @@ EOF
 
   notesnook-server:
     image: streetwriters/notesnook-sync:v1.0-beta.32
-    restart: unless-stopped
     ports:
       - 5264:5264
     volumes:
-      - dpdata:/app/.aspnet/DataProtection-Keys
+      - dpdata-notesnook:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
@@ -187,7 +163,7 @@ EOF
       - setup-s3
       - identity-server
     healthcheck:
-      test: ["CMD", "wget", "--tries=1", "-nv", "-q", "http://localhost:5264/health", "-O-"]
+      test: ["CMD", "nc", "-z", "127.0.0.1", "5264"]
       interval: 40s
       timeout: 30s
       retries: 3
@@ -214,11 +190,10 @@ EOF
 
   sse-server:
     image: streetwriters/sse:v1.0-beta.32
-    restart: unless-stopped
     ports:
       - 7264:7264
     volumes:
-      - dpdata:/app/.aspnet/DataProtection-Keys
+      - dpdata-sse:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
@@ -226,7 +201,7 @@ EOF
       - identity-server
       - notesnook-server
     healthcheck:
-      test: ["CMD", "wget", "--tries=1", "-nv", "-q", "http://localhost:7264/health", "-O-"]
+      test: ["CMD", "nc", "-z", "127.0.0.1", "7264"]
       interval: 40s
       timeout: 30s
       retries: 3
@@ -244,11 +219,10 @@ EOF
 
   monograph-server:
     image: streetwriters/monograph:1.3.1
-    restart: unless-stopped
     ports:
       - 6264:3000
     volumes:
-      - dpdata:/app/.aspnet/DataProtection-Keys
+      - dpdata-monograph:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
@@ -276,7 +250,7 @@ EOF
 
   cors-proxy:
     build: ./cors-proxy
-    restart: unless-stopped
+    ports: []
     networks:
       - notesnook
     env_file: *env-files
@@ -285,7 +259,7 @@ EOF
       HOST: "0.0.0.0"
       ALLOWED_ORIGINS: "${NOTESNOOK_CORS_ORIGINS}"
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok?0:1)).catch(() => process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok?0:1)).catch(() => process.exit(1))"]
       interval: 40s
       timeout: 10s
       retries: 3
@@ -301,7 +275,6 @@ EOF
 
   caddy:
     image: caddy:alpine
-    restart: unless-stopped
     ports:
       - 8080:80
     networks:
@@ -344,6 +317,8 @@ networks:
 volumes:
   dbdata:
   s3data:
-  dpdata:
   caddy-data:
-
+  dpdata-identity:
+  dpdata-notesnook:
+  dpdata-sse:
+  dpdata-monograph:
