@@ -247,7 +247,6 @@ services:
 
   cors-proxy:
     build: ./cors-proxy
-    ports: []
     networks:
       - notesnook
     env_file: *env-files
