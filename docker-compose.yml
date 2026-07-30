@@ -72,8 +72,6 @@ services:
 
   notesnook-s3:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    ports:
-      - 9000:9000
     volumes:
       - s3data:/data/s3
     environment:
@@ -111,18 +109,23 @@ services:
       - notesnook
     entrypoint: /bin/bash
     env_file: *env-files
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-}"
     command:
       - -c
       - |
-        until mc alias set minio http://notesnook-s3:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin}; do
+        if [ -z "$$MINIO_ROOT_USER" ] || [ -z "$$MINIO_ROOT_PASSWORD" ]; then
+          echo "ERROR: MINIO_ROOT_USER and MINIO_ROOT_PASSWORD must be set" >&2
+          exit 1
+        fi
+        until mc alias set minio http://notesnook-s3:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
           sleep 1;
         done;
         mc mb minio/attachments -p || true
 
   identity-server:
     image: streetwriters/identity:v1.0-beta.32
-    ports:
-      - 8264:8264
     volumes:
       - dpdata-identity:/app/.aspnet/DataProtection-Keys
     networks:
@@ -151,8 +154,6 @@ services:
 
   notesnook-server:
     image: streetwriters/notesnook-sync:v1.0-beta.32
-    ports:
-      - 5264:5264
     volumes:
       - dpdata-notesnook:/app/.aspnet/DataProtection-Keys
     networks:
@@ -190,8 +191,6 @@ services:
 
   sse-server:
     image: streetwriters/sse:v1.0-beta.32
-    ports:
-      - 7264:7264
     volumes:
       - dpdata-sse:/app/.aspnet/DataProtection-Keys
     networks:
@@ -219,8 +218,6 @@ services:
 
   monograph-server:
     image: streetwriters/monograph:1.3.1
-    ports:
-      - 6264:3000
     volumes:
       - dpdata-monograph:/app/.aspnet/DataProtection-Keys
     networks:
