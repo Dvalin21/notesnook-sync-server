@@ -10,6 +10,7 @@ This branch uses **Garage S3** as the default object storage backend (replacing 
 
 | Service | Port | Description |
 |---|---|---|
+| cors-proxy | 3000 | Bun-based CORS proxy for cross-origin media fetches |
 | identity-server | 8264 | Authentication & signup |
 | notesnook-server | 5264 | Sync engine |
 | sse-server | 7264 | Server-sent events for real-time sync |
@@ -52,7 +53,8 @@ bash examples/garage/setup-garage.sh
 curl -fsS http://localhost:5264/health && echo " sync OK"
 curl -fsS http://localhost:8264/health && echo " auth OK"
 curl -fsS http://localhost:7264/health && echo " sse OK"
-curl -fsS http://localhost:3000/api/health && echo " monograph OK"
+curl -fsS http://localhost:6264/api/health && echo " monograph OK"
+curl -fsS http://localhost:3000/health && echo " cors-proxy OK"
 
 # 8. Open monograph in browser (behind YOUR TLS proxy)
 #    http://monogr.ph  (or whatever MONOGRAPH_PUBLIC_URL you set)
@@ -70,7 +72,7 @@ Copy `.env` to `.env.local`, never commit `.env.local` to git.
 |---|---|---|
 | `INSTANCE_NAME` | Human name for this server | `my-notesnook` |
 | `NOTESNOOK_API_SECRET` | API auth secret (must differ from upstream). Generate with `openssl rand -base64 48`. | `a1b2c3...` |
-| `DISABLE_SIGNUPS` | `true` = nobody can register new accounts (recommended). `false` = open registration. | `true` |
+| `DISABLE_SIGNUPS` | `true` = nobody can register new accounts. `false` = open registration. | `false` |
 | `SMTP_HOST` | Outgoing mail server hostname | `smtp.example.com` |
 | `SMTP_PORT` | Outgoing mail server port | `587` |
 | `SMTP_USERNAME` | SMTP login user | `alerts@example.com` |
@@ -146,6 +148,10 @@ GARAGE_ACCESS_KEY_SECRET=<your-secret-key>
 GARAGE_RPC_SECRET=<your-rpc-secret>
 ```
 
+Do **not** commit `.env.local` to git — it is gitignored. The base `.env` ships with
+sensible defaults (`DISABLE_SIGNUPS=false`, `NOTESNOOK_CORS_ORIGINS=*`,
+Garage placeholders).
+
 Don't expose Garage port 3900 to the internet. Your TLS proxy reaches it internally via docker network.
 
 ### Step 4 — set up TLS / reverse proxy
@@ -191,7 +197,7 @@ This creates the `attachments` bucket in Garage. Run once after first start.
 
 ### Step 7 — create your first account
 
-Go to your Notesnook client (app or web) → Settings → Sync → "Use custom server". Enter the URLs from `AUTH_SERVER_PUBLIC_URL`, `NOTESNOOK_APP_PUBLIC_URL`, etc. The first account you create becomes the admin — with `DISABLE_SIGNUPS=true` you must use that one account for everything unless you set it to false temporarily.
+Go to your Notesnook client (app or web) → Settings → Sync → "Use custom server". Enter the URLs from `AUTH_SERVER_PUBLIC_URL`, `NOTESNOOK_APP_PUBLIC_URL`, etc. The first account you create becomes the admin. If `DISABLE_SIGNUPS=true`, only that admin account can log in — set it to `false` temporarily if you need additional accounts.
 
 ## What's different in this fork vs upstream
 

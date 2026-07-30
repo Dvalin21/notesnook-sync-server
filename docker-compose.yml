@@ -53,7 +53,6 @@ services:
     restart: unless-stopped
     volumes:
       - dbdata:/data/db
-      - dpdata:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     command: --replSet rs0 --bind_ip_all
@@ -111,12 +110,15 @@ services:
     ports:
       - 8264:8264
     volumes:
-      - dpdata:/app/.aspnet/DataProtection-Keys
+      - dpdata-identity:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
     depends_on:
-      - notesnook-db
+      notesnook-db:
+        condition: service_started
+      init-dpdata:
+        condition: service_completed_successfully
     environment:
       <<: *server-discovery
       MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replSet=rs0
@@ -128,14 +130,17 @@ services:
     ports:
       - 5264:5264
     volumes:
-      - dpdata:/app/.aspnet/DataProtection-Keys
+      - dpdata-notesnook:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
     depends_on:
-      - notesnook-s3
-      - setup-s3
-      - identity-server
+      notesnook-s3:
+        condition: service_started
+      setup-s3:
+        condition: service_completed_successfully
+      identity-server:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "-s", "http://localhost:5264/health"]
       interval: 40s
@@ -160,13 +165,15 @@ services:
     ports:
       - 7264:7264
     volumes:
-      - dpdata:/app/.aspnet/DataProtection-Keys
+      - dpdata-sse:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
     depends_on:
-      - identity-server
-      - notesnook-server
+      identity-server:
+        condition: service_started
+      notesnook-server:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "-s", "http://localhost:7264/health"]
       interval: 40s
@@ -182,12 +189,13 @@ services:
     ports:
       - 6264:3000
     volumes:
-      - dpdata:/app/.aspnet/DataProtection-Keys
+      - dpdata-monograph:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
     depends_on:
-      - notesnook-server
+      notesnook-server:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/api/health"]
       interval: 40s
@@ -199,11 +207,57 @@ services:
       API_HOST: http://notesnook-server:5264
       PUBLIC_URL: ${MONOGRAPH_PUBLIC_URL}
 
+  cors-proxy:
+    build:
+      context: ./cors-proxy
+      dockerfile: Dockerfile
+    image: streetwriters/cors-proxy:latest
+    ports:
+      - 3000:3000
+    environment:
+      PORT: 3000
+      HOST: 0.0.0.0
+      ALLOWED_ORIGINS: "${NOTESNOOK_CORS_ORIGINS:-*}"
+    networks:
+      - notesnook
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  init-dpdata:
+    image: busybox:1.36
+    restart: "no"
+    volumes:
+      - dpdata-identity:/volumes/dpdata-identity
+      - dpdata-notesnook:/volumes/dpdata-notesnook
+      - dpdata-sse:/volumes/dpdata-sse
+      - dpdata-monograph:/volumes/dpdata-monograph
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "Setting DataProtection volume permissions..."
+        for vol in /volumes/*; do
+          chown -R 1000:1000 "$vol"
+          echo "  chowned $(basename $vol)"
+        done
+        echo "Done."
+    depends_on:
+      validate:
+        condition: service_completed_successfully
+
 networks:
   notesnook:
 
 volumes:
   dbdata:
   s3data:
-  dpdata:
+  dpdata-identity:
+  dpdata-notesnook:
+  dpdata-sse:
+  dpdata-monograph:
 
