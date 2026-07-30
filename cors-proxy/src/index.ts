@@ -5,11 +5,13 @@
 
 const PORT = Bun.env.PORT || 3000;
 const HOST = Bun.env.HOST || "localhost";
-const ALLOWED_ORIGINS = Bun.env.ALLOWED_ORIGINS?.split(",") || ["*"];
+const ALLOWED_ORIGINS = (Bun.env.ALLOWED_ORIGINS?.split(",") || ["*"])
+  .map(s => s.trim()).filter(s => s.length > 0);
 const MAX_REDIRECTS = 5;
 const MAX_RESPONSE_SIZE = 50 * 1024 * 1024; // 50MB
 const PROXY_TIMEOUT_MS = 30000; // 30 seconds
-const ALLOWED_DOMAINS = Bun.env.ALLOWED_DOMAINS?.split(",") || [];
+const ALLOWED_DOMAINS = (Bun.env.ALLOWED_DOMAINS?.split(",") || [])
+  .map(s => s.trim()).filter(s => s.length > 0);
 
 // CORS headers configuration — uses ALLOWED_ORIGINS from env or "*" as fallback
 const corsOrigin = ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS[0] : "*";
