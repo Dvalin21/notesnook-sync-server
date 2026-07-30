@@ -20,7 +20,8 @@ done
 
 # 2. Caddy routing
 echo; echo "─── 2. Caddy routing ───"
-code=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: sync.example.com" --connect-timeout 5 http://localhost:8080/health 2>/dev/null || echo "000")
+query=$(echo "$1" | sed -e 's/example.com/example.com/g')
+code=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: ${query}" --connect-timeout 5 http://localhost:8080/health 2>/dev/null || echo "000")
 [ "$code" = "200" ] && pass "Caddy -> sync.example.com ($code)" || fail "Caddy -> $code (expected 200)"
 
 # 3. MinIO bucket
