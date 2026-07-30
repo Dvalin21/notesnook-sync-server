@@ -48,6 +48,12 @@ Upstream: streetwriters/notesnook-sync-server (no Caddy, `:latest` tags).
 | cors-proxy | *(build from source)* | Custom CORS proxy |
 | vandot/alpine-bash | `:latest` | One-shot validate service (low risk) |
 
+### autoheal
+
+`willfarrell/autoheal` restarts any container Docker marks as `unhealthy`.
+Docker's `restart: unless-stopped` only handles container exits (crashes),
+not healthcheck failures. autoheal covers that gap.
+
 ## Known issues (not fixed here)
 
 - Client/server version skew: app 3.3 broke self-hosted sync. Pin client to 3.2.4 if hit.

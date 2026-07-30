@@ -20,6 +20,7 @@ the `garage-migration` branch.
 | notesnook-s3 (MinIO) | 9000 | **9000** (host) | S3-compatible object storage |
 | notesnook-s3 console | 9090 | — | MinIO web console (via Caddy at minio.*) |
 | notesnook-db | 27017 | — | MongoDB 8.0 replica set |
+| autoheal | — | — | Restarts any container Docker marks unhealthy |
 
 ## Quick start
 
