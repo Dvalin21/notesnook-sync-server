@@ -44,6 +44,27 @@ services:
         fi
     restart: "no"
 
+  # One-shot: chown DataProtection volumes to dotnetuser (uid 1000)
+  # before the .NET services start. Docker named volumes always start
+  # owned by root, but streetwriters images run as uid 1000.
+  init-dpdata:
+    image: alpine:latest
+    restart: "no"
+    volumes:
+      - dpdata-identity:/data/identity
+      - dpdata-notesnook:/data/notesnook
+      - dpdata-sse:/data/sse
+    depends_on:
+      validate:
+        condition: service_completed_successfully
+    command:
+      - sh
+      - -c
+      - |
+        echo "Setting DataProtection volume permissions..."
+        chown -R 1000:1000 /data/identity /data/notesnook /data/sse
+        echo "Done."
+
   notesnook-db:
     image: mongo:8.0.28
     hostname: notesnook-db
@@ -132,7 +153,10 @@ services:
       - notesnook
     env_file: *env-files
     depends_on:
-      - notesnook-db
+      init-dpdata:
+        condition: service_completed_successfully
+      notesnook-db:
+        condition: service_started
     environment:
       <<: *server-discovery
       MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replSet=rs0
