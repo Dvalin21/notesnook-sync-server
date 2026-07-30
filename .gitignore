@@ -260,10 +260,13 @@ paket-files/
 __pycache__/
 *.pyc
 
-# Secrets — never commit .env files
+# Secrets — never commit real .env files
 .env
 .env.local
 .env.*
+# .env.example is the safe template and IS committed
+!.env.example
+.env.bak*
 
 keys/
 dist/
