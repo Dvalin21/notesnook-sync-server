@@ -81,7 +81,7 @@ Every `CHANGEME-*` value must be replaced. Here is every field explained:
 | `SERVER_DOMAIN` | **Your domain** (e.g., `example.com`). Used by Caddy to match Host headers. |
 | `INSTANCE_NAME` | Anything you like (e.g., `my-notes`). Shows in the Monograph web client. |
 | `NOTESNOOK_API_SECRET` | **Generate**: `openssl rand -base64 48`. Internal signing secret for auth tokens. |
-| `DISABLE_SIGNUPS` | `true` = no new registrations. Set to `false` to create your first account, then set back to `true`. |
+| `DISABLE_SIGNUPS` | `false` = registration open, `true` = locked down. Default in `.env.example` is `false`. After creating your account, set to `true` and restart. |
 | `NOTESNOOK_APP_PUBLIC_URL` | `https://sync.example.com` — used by Android app as Sync URL |
 | `AUTH_SERVER_PUBLIC_URL` | `https://auth.example.com` — used by Android app as Auth URL |
 | `MONOGRAPH_PUBLIC_URL` | `https://notes.example.com` — web client URL |
@@ -89,7 +89,7 @@ Every `CHANGEME-*` value must be replaced. Here is every field explained:
 | `MINIO_ROOT_USER` | **Generate**: `openssl rand -base64 12`. MinIO admin login + S3 access key. |
 | `MINIO_ROOT_PASSWORD` | **Generate**: `openssl rand -base64 22`. MinIO admin password + S3 secret key. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | Optional — for email 2FA and password reset. Leave as-is if not needed. |
-| `NOTESNOOK_CORS_ORIGINS` | Optional — extra CORS origins. Leave blank if behind your own TLS proxy. |
+| `NOTESNOOK_CORS_ORIGINS` | Comma-separated allowed origins for the CORS proxy at `cors.example.com`. Default `*` allows all. |
 
 **MinIO credentials warning:** If `MINIO_ROOT_USER` or `MINIO_ROOT_PASSWORD` is empty,
 the `setup-s3` container will refuse to start. Generate strong values.
@@ -188,27 +188,40 @@ the host. If from another machine, replace `localhost` with your server's IP.
 
 ### 6. Create your first account
 
+Signup must be done through the **Notesnook mobile or desktop app** —
+the Monograph web client (`notes.example.com`) has no registration page.
+
+The registration endpoint is `POST /users` on the sync server
+(`sync.example.com/users`), NOT the identity server. Internally the sync
+server calls the identity server via WAMP RPC (not HTTP). Your account is
+created in **your MongoDB** on your server — nothing goes to Notesnook's cloud.
+
 1. Edit `.env` and set `DISABLE_SIGNUPS=false`
 2. Restart: `docker compose up -d identity-server notesnook-server`
-3. Open **https://notes.example.com** (your Monograph URL) in a browser
-4. Click **Sign up** and create your account
-5. **IMPORTANT**: Set `DISABLE_SIGNUPS=true` again and restart
+3. **Install the Notesnook app** on your phone or desktop
+4. **Configure custom servers** in the app:
+   - Android: Settings → Sync → Use custom server
+   - Desktop: Settings → Servers
+5. **Create your account** through the app (Sign Up)
+6. **IMPORTANT**: Set `DISABLE_SIGNUPS=true` again and restart
 
 ### 7. Connect clients
 
-**Android:**
-
-Settings → Sync → Use custom server:
+**Android / Desktop — Server URLs:**
 
 | Field | Value |
 |---|---|
 | Auth URL | `https://auth.example.com` |
 | Sync URL | `https://sync.example.com` |
 | Attachments URL | `https://attach.example.com` |
+| Monograph URL | `https://notes.example.com` |
+
+After entering these, tap **Test connection**, then **Save**, then **Sign up**.
 
 **Web browser:**
 
-Navigate to `https://notes.example.com` or `https://example.com`.
+Navigate to `https://notes.example.com` or `https://example.com` for the
+Monograph web client (read-only note sharing — no account management).
 
 ---
 
@@ -257,6 +270,7 @@ docker compose up -d
 | Caddy returns 502 | Backend not ready | Wait for all services to show `(healthy)` in `docker compose ps`. |
 | "invalid_grant" on OAuth | No account exists yet | Enable signups (`DISABLE_SIGNUPS=false`), create an account, then disable again. |
 | Can't connect from Android | Wrong URLs in app settings | Verify `NOTESNOOK_APP_PUBLIC_URL`, `AUTH_SERVER_PUBLIC_URL`, `ATTACHMENTS_SERVER_PUBLIC_URL` in `.env` exactly match what you put in the app. |
+| `cors.example.com` shows JSON usage page | That's normal | The CORS proxy is an **API**, not a web page. `GET /` returns instructions. Use `GET /health` to check it's alive, or `GET /https://target-url` to proxy content. |
 | Web client shows blank page | Monograph needs API_HOST | Check `docker compose logs monograph-server`. It should connect to `notesnook-server:5264`. |
 | Port conflict on 8080 | Another service uses that port | Change the host port in `docker-compose.yml` (e.g., `8080:80` → `8081:80`) and update your TLS proxy. |
 
