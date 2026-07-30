@@ -106,15 +106,6 @@ By design this stack publishes ONE port externally: port 8080.
 - Every subdomain is a `Host:` header match. IP-based direct ports are NOT meant for clients.
 - MinIO, identity, sync, SSE, and monograph do NOT need 6264/7264/8264/5264/9000/9090 exposed outside the host.
 
-## Secrets hygiene
-
-- `.env` is `.gitignore:266`d. If `.env` is present, it may contain live credentials.
-- `.env.example` is safe for git; it contains placeholders only.
-- Rules:
-  - never put real password into `.env.example`
-  - never put your real domain as a default in `.env.example`
-  - before pushing code, check `rg -n 'keithtechco|minioadmin|CHANGEME' .env .appveyor.yml ...`
-
 ## Maintenance
 
 ### Backup
