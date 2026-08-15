@@ -1,4 +1,4 @@
-# Notesnook Sync Server
+# Notesnook Sync Server (Dvalin21 fork)
 
 Self-hosted Notesnook sync backend in Docker. No .NET build required.
 This fork adds operational hardening, fixed CORS wiring, per-service ASP.NET
@@ -14,12 +14,29 @@ YOUR TLS PROXY :443  →  this host :8080  →  Caddy :80  →  by Host header:
   notes.example.com    →  monograph-server:3000
   example.com          →  monograph-server:3000
   attach.example.com   →  notesnook-s3:9000
-  minio.example.com    →  notesnook-s3:9090
+  minio.example.com    →  notesnook-s3:9090  (MinIO console — optional)
   cors.example.com     →  cors-proxy:3000
 ```
 
 Clients never touch internal ports. Everything behind 8080 is plain HTTP.
 Your external proxy terminates TLS.
+
+---
+
+## What this fork changed from upstream
+
+1. `MONGODB_DATABASE_NAME` is honored by all repositories (upstream hardcoded "notesnook" for 7 collections).
+2. `NOTESNOOK_CORS_ORIGINS` env var is wired correctly (upstream read wrong key `NOTESNOOK_CORS`).
+3. Missing OAuth `profile` scope added in identity config (required by Notesnook 3.x OIDC flow).
+4. Per-service ASP.NET DataProtection key volumes instead of one shared `dpdata`.
+5. `init-dpdata` one-shot container fixes volume permissions automatically on first boot.
+6. MongoDB is NOT exposed on a host port.
+7. Healthchecks use `nc` for .NET services, `node` for cors-proxy, and `bun` for monograph — instead of `wget`.
+8. Core service images pinned to immutable versions (`mongo:8.0.28`, MinIO release tags, `streetwriters/*:v1.0-beta.32`, `monograph:1.3.1`); infrastructure images use stable tags (`caddy:alpine`, `alpine:latest`, `willfarrell/autoheal:latest`, `vandot/alpine-bash`).
+9. `setup-s3` fails fast if `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` are missing.
+10. Caddy internal reverse proxy routes all traffic through a single port (8080).
+11. MinIO image pinned to `RELEASE.2025-09-07T16-13-09Z`, mc pinned to `RELEASE.2025-08-13T08-35-41Z`.
+12. MongoDB is `8.0.28` (upgraded from `7.0.12`).
 
 ---
 
@@ -30,7 +47,7 @@ Your external proxy terminates TLS.
 | **Docker + Docker Compose V2** | The whole stack runs in containers. `docker compose` (with a space, not `docker-compose`). |
 | **A domain you control** | All routing is by `Host:` header. You need `example.com` (replace with your real domain). |
 | **DNS** | Each subdomain below must resolve to your server's public IP. **Use a wildcard `*.example.com` A/AAAA record** — one record covers all 8. |
-| **A TLS-terminating reverse proxy** | Caddy, nginx, Apache, Traefik, HAProxy, or any cloud LB. This stack exposes port 8080 with plain HTTP; your proxy adds TLS. |
+| **A TLS-terminating reverse proxy** | Caddy, nginx, Nginx Proxy Manager, Apache, Traefik, HAProxy, or any cloud LB. This stack exposes port 8080 with plain HTTP; your proxy adds TLS. |
 | **Port 8080 open** | The stack publishes **one port**: `8080` on the host. Your TLS proxy connects here. |
 
 ### DNS records
@@ -51,10 +68,61 @@ This single record covers all subdomains the stack needs:
 | `notes.example.com` | Monograph web client |
 | `example.com` | Web client (apex/root) |
 | `attach.example.com` | S3-compatible attachment storage (MinIO) |
-| `minio.example.com` | MinIO admin web console |
 | `cors.example.com` | CORS proxy for external image embeds |
 
-No wildcard support? Create 8 individual A records — all pointing to the same IP.
+**Optional:** `minio.example.com` → MinIO admin console (port 9090 internal, routed via Caddy).
+
+No wildcard support? Create individual A records — all pointing to the same IP.
+
+---
+
+## Architecture
+
+### Single port model
+
+By design, this stack publishes **one port** externally: host `:8080`.
+
+```
+Host :8080  →  Caddy :80  →  routes by Host header to correct backend
+```
+
+Internal ports `5264` / `8264` / `7264` / `3000` / `9000` / `9090` are **NOT**
+exposed to the host or to clients. They're only reachable inside the Docker
+network. This is a security hardening over the upstream stack.
+
+### .env / subdomain mapping table
+
+| Variable | Client field | Caddy `Host:` | Internal target |
+|---|---|---|---|
+| `NOTESNOOK_APP_PUBLIC_URL` | Sync URL | `sync.example.com` | `notesnook-server:5264` |
+| `AUTH_SERVER_PUBLIC_URL` | Auth URL | `auth.example.com` | `identity-server:8264` |
+| `MONOGRAPH_PUBLIC_URL` | Web URL | `notes.example.com` / `example.com` | `monograph-server:3000` |
+| `ATTACHMENTS_SERVER_PUBLIC_URL` | Attachments URL | `attach.example.com` | `notesnook-s3:9000` |
+
+Never mix these up. The Android client uses the first three exactly as shown
+above. The web client uses `MONOGRAPH_PUBLIC_URL`.
+
+### MinIO / S3
+
+MinIO provides S3-compatible object storage for note attachments. It runs
+internally on port 9000. Caddy routes `attach.example.com` to it.
+
+The MinIO admin console runs on port 9090 internally. Caddy can route
+`minio.example.com` to it for admin access — this is optional.
+
+`setup-s3` creates the `attachments` bucket automatically on first boot.
+
+### Caddy internal routing
+
+| Host header | Routes to |
+|---|---|
+| `sync.example.com` | `notesnook-server:5264` |
+| `auth.example.com` | `identity-server:8264` |
+| `sse.example.com` | `sse-server:7264` |
+| `notes.example.com` / `example.com` | `monograph-server:3000` |
+| `attach.example.com` | `notesnook-s3:9000` (S3 API) |
+| `minio.example.com` | `notesnook-s3:9090` (MinIO console) |
+| `cors.example.com` | `cors-proxy:3000` |
 
 ---
 
@@ -76,20 +144,21 @@ nano .env
 
 Every `CHANGEME-*` value must be replaced. Here is every field explained:
 
-| Variable | What to put |
-|---|---|
-| `SERVER_DOMAIN` | **Your domain** (e.g., `example.com`). Used by Caddy to match Host headers. |
-| `INSTANCE_NAME` | Anything you like (e.g., `my-notes`). Shows in the Monograph web client. |
-| `NOTESNOOK_API_SECRET` | **Generate**: `openssl rand -base64 48`. Internal signing secret for auth tokens. |
-| `DISABLE_SIGNUPS` | `false` = registration open, `true` = locked down. Default in `.env.example` is `false`. After creating your account, set to `true` and restart. |
-| `NOTESNOOK_APP_PUBLIC_URL` | `https://sync.example.com` — used by Android app as Sync URL |
-| `AUTH_SERVER_PUBLIC_URL` | `https://auth.example.com` — used by Android app as Auth URL |
-| `MONOGRAPH_PUBLIC_URL` | `https://notes.example.com` — web client URL |
-| `ATTACHMENTS_SERVER_PUBLIC_URL` | `https://attach.example.com` — used by Android app as Attachments URL |
-| `MINIO_ROOT_USER` | **Generate**: `openssl rand -base64 12`. MinIO admin login + S3 access key. |
-| `MINIO_ROOT_PASSWORD` | **Generate**: `openssl rand -base64 22`. MinIO admin password + S3 secret key. |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | Optional — for email 2FA and password reset. Leave as-is if not needed. |
-| `NOTESNOOK_CORS_ORIGINS` | Comma-separated allowed origins for the CORS proxy at `cors.example.com`. Default `*` allows all. |
+| Variable | Required in compose? | Notes |
+|---|---|---|
+| `SERVER_DOMAIN` | Yes — required by `validate` service + Caddy `{$DOMAIN}` templating | Your domain, e.g. `example.com` |
+| `INSTANCE_NAME` | Yes — required by `validate` service | Human name for this instance |
+| `NOTESNOOK_API_SECRET` | Yes — required by `validate` service + identity server | Generate with `openssl rand -base64 48` |
+| `DISABLE_SIGNUPS` | Yes — required by `validate` service | `false` to allow signups, `true` to lock down |
+| `NOTESNOOK_APP_PUBLIC_URL` | Yes — required by `validate` service | `https://sync.example.com` |
+| `AUTH_SERVER_PUBLIC_URL` | Yes — required by `validate` service | `https://auth.example.com` |
+| `MONOGRAPH_PUBLIC_URL` | Yes — required by `validate` service + monograph container | `https://notes.example.com` |
+| `ATTACHMENTS_SERVER_PUBLIC_URL` | Yes — required by `validate` service | `https://attach.example.com` |
+| `MINIO_ROOT_USER` | No — but `setup-s3` will fail if empty | Generate with `openssl rand -base64 12`. Not checked by `validate`; `setup-s3` refuses to start if blank. |
+| `MINIO_ROOT_PASSWORD` | No — but `setup-s3` will fail if empty | Generate with `openssl rand -base64 22`. Not checked by `validate`; `setup-s3` refuses to start if blank. |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | No — optional, warn if missing | Leave blank if not using email features |
+| `NOTESNOOK_CORS_ORIGINS` | No — used by `cors-proxy` only | Comma-separated origins, default `*`. Not checked by `validate`; the `cors-proxy` container receives it via env_file. |
+| `TWILIO_*` | No — optional, passed to all services | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SERVICE_SID` for SMS 2FA via `SMSSender`. Leave empty to disable SMS 2FA. |
 
 **MinIO credentials warning:** If `MINIO_ROOT_USER` or `MINIO_ROOT_PASSWORD` is empty,
 the `setup-s3` container will refuse to start. Generate strong values.
@@ -145,6 +214,32 @@ This stack does **not** handle TLS itself. You need an external proxy that:
 Caddy already handles the internal routing — NPM's job is just TLS termination
 and forwarding to port 8080. The Host header must reach Caddy unmodified.
 
+**Caddy (if using Caddy as your external proxy):**
+
+```caddy
+*.example.com {
+    reverse_proxy localhost:8080
+}
+```
+
+**nginx:**
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name *.example.com;
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+    location / {
+        proxy_pass http://localhost:8080;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+**Cloudflare / AWS / any cloud LB:** Create a target group pointing to
+`http://<your-server-ip>:8080` with host header passthrough enabled.
+
 ### 4. Start the stack
 
 ```bash
@@ -183,7 +278,7 @@ Once all services show `(healthy)`, test each subdomain through Caddy on port 80
 curl -fsS -H "Host: auth.example.com"   http://localhost:8080/health
 curl -fsS -H "Host: sync.example.com"   http://localhost:8080/health
 curl -fsS -H "Host: sse.example.com"    http://localhost:8080/health
-curl -fsS -H "Host: notes.example.com" http://localhost:8080/api/health
+curl -fsS -H "Host: notes.example.com"  http://localhost:8080/api/health
 curl -fsS -H "Host: example.com"        http://localhost:8080/api/health
 curl -fsS -H "Host: attach.example.com" http://localhost:8080/health
 curl -fsS -H "Host: minio.example.com"  http://localhost:8080/
@@ -216,24 +311,30 @@ created in **your MongoDB** on your server — nothing goes to Notesnook's cloud
 1. Edit `.env` and set `DISABLE_SIGNUPS=false`
 2. Restart: `docker compose up -d identity-server notesnook-server`
 3. **Install the Notesnook app** on your phone or desktop
-4. **Configure custom servers** in the app:
-   - Android: Settings → Sync → Use custom server
-   - Desktop: Settings → Servers
+4. **Configure custom servers** in the app (see below)
 5. **Create your account** through the app (Sign Up)
 6. **IMPORTANT**: Set `DISABLE_SIGNUPS=true` again and restart
 
 ### 7. Connect clients
 
-**Android / Desktop — Server URLs:**
+**Android app — Server URLs:**
 
-| Field | Value |
+Open the Notesnook app → Settings → Sync → "Use custom server" (or similar).
+Enter these exact values:
+
+| Field in app | Value |
 |---|---|
-| Auth URL | `https://auth.example.com` |
-| Sync URL | `https://sync.example.com` |
-| Attachments URL | `https://attach.example.com` |
-| Monograph URL | `https://notes.example.com` |
+| Auth URL / Identity server | `https://auth.example.com` |
+| Sync URL / Sync server | `https://sync.example.com` |
+| Attachments URL / S3 URL | `https://attach.example.com` |
+| Monograph URL (web only) | `https://notes.example.com` |
 
-After entering these, tap **Test connection**, then **Save**, then **Sign up**.
+After entering these, tap **Test connection** (if available), then **Save**.
+Then use **Sign up** or **Log in** to create your account.
+
+**Desktop app — Server URLs:**
+
+Settings → Servers → Add custom server. Same URLs as above.
 
 **Web browser:**
 
@@ -242,14 +343,56 @@ Monograph web client (read-only note sharing — no account management).
 
 ---
 
+## Test connection from the Android app
+
+After entering the server URLs in the app's custom server settings:
+
+1. Tap **Test connection** or **Verify** (if the app has this button)
+2. The app should reach `AUTH_SERVER_PUBLIC_URL` and discover the OIDC metadata
+3. Then it should reach `NOTESNOOK_APP_PUBLIC_URL` and confirm the sync endpoint
+4. If both succeed, save the configuration
+5. Use **Sign up** to create your first account (if `DISABLE_SIGNUPS=false`)
+
+If the test fails:
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| "Cannot reach server" / timeout | URLs are wrong or server not reachable from the device | Verify the URLs resolve from your phone's network. Check that port 8080 is reachable. |
+| SSL certificate error | Self-signed cert or wrong domain in URL | Make sure you're using `https://` with a valid certificate for the exact domain. |
+| "Invalid server" / "Not a Notesnook server" | The URL points to the wrong service or returns an error | Double-check that `AUTH_SERVER_PUBLIC_URL` points to `auth.example.com` (identity server), not the sync server. |
+| Signup fails after successful test | `DISABLE_SIGNUPS=true` or SMTP issue | Set `DISABLE_SIGNUPS=false` temporarily, restart identity-server, try again. |
+
+---
+
 ## MinIO admin login
 
-- Console URL:  **https://minio.example.com**
-- S3 API URL:   **https://attach.example.com**
+- Console URL:  **https://minio.example.com** (optional — routed via Caddy)
+- S3 API URL:   **https://attach.example.com** (used by the Notesnook app)
 - Username: value of `MINIO_ROOT_USER` in `.env`
 - Password: value of `MINIO_ROOT_PASSWORD` in `.env`
 
-`setup-s3` creates the `attachments` bucket automatically on first boot.
+---
+
+## Garage S3 (alternative to MinIO)
+
+This branch has experimental Garage S3 support as an alternative to MinIO.
+MinIO is the default and recommended backend. Garage is available if you
+need S3-compatible storage with a different storage engine.
+
+To use Garage instead of MinIO:
+
+```bash
+# Generate Garage credentials
+GARAGE_RPC_SECRET=$(openssl rand -base64 32)
+GARAGE_ACCESS_KEY_ID=$(openssl rand -base64 12)
+GARAGE_ACCESS_KEY_SECRET=$(openssl rand -base64 24)
+
+# Add them to .env
+# Then start with the Garage overlay
+docker compose -f docker-compose.yml -f examples/garage/docker-compose.garage.yml up -d
+```
+
+See `examples/garage/README.md` for details.
 
 ---
 
@@ -263,16 +406,33 @@ docker compose exec notesnook-db mongodump \
   --uri="mongodb://notesnook-db:27017/notesnook" \
   --archive=/backup/notesnook-$(date +%Y%m%d).archive
 
-# MinIO attachments
-docker compose exec notesnook-s3 mc mirror /data/s3 /backup/s3
+# MinIO attachments (from host)
+docker run --rm -v notesnook-sync-server_s3data:/data -v /backup/s3:/backup \
+  alpine tar czf /backup/s3/minio-$(date +%Y%m%d).tar.gz -C /data .
 ```
 
 ### Updates
 
 ```bash
-git pull origin master
+git pull
 docker compose pull
 docker compose up -d
+```
+
+### Disaster recovery: DataProtection keys
+
+The `dpdata-*` volumes store ASP.NET DataProtection keys. These keys
+validate authentication cookies and tokens. If you lose these volumes,
+all users will be logged out and must sign in again.
+
+Back them up alongside your MongoDB backup:
+
+```bash
+# Backup all dpdata volumes
+for vol in dpdata-identity dpdata-notesnook dpdata-sse dpdata-monograph; do
+  docker run --rm -v notesnook-sync-server_${vol}:/data -v /backup/dpdata:/backup \
+    alpine tar czf /backup/dpdata/${vol}-$(date +%Y%m%d).tar.gz -C /data .
+done
 ```
 
 ---
@@ -287,50 +447,10 @@ docker compose up -d
 | Caddy returns 502 | Backend not ready | Wait for all services to show `(healthy)` in `docker compose ps`. |
 | "invalid_grant" on OAuth | No account exists yet | Enable signups (`DISABLE_SIGNUPS=false`), create an account, then disable again. |
 | Can't connect from Android | Wrong URLs in app settings | Verify `NOTESNOOK_APP_PUBLIC_URL`, `AUTH_SERVER_PUBLIC_URL`, `ATTACHMENTS_SERVER_PUBLIC_URL` in `.env` exactly match what you put in the app. |
-| `cors.example.com` shows JSON usage page | That's normal | The CORS proxy is an **API**, not a web page. `GET /` returns instructions. Use `GET /health` to check it's alive, or `GET /https://target-url` to proxy content. |
+| `cors.example.com` shows JSON usage page | That's normal | The CORS proxy is an **API**, not a web page. `GET /` returns instructions. Use `GET /health` to check it's alive. |
 | Web client shows blank page | Monograph needs API_HOST | Check `docker compose logs monograph-server`. It should connect to `notesnook-server:5264`. |
 | Port conflict on 8080 | Another service uses that port | Change the host port in `docker-compose.yml` (e.g., `8080:80` → `8081:80`) and update your TLS proxy. |
-
----
-
-## Architecture
-
-### Single port model
-
-By design, this stack publishes **one port** externally: host `:8080`.
-
-```
-Host :8080  →  Caddy :80  →  routes by Host header to correct backend
-```
-
-Internal ports `5264` / `8264` / `7264` / `3000` / `9000` / `9090` are **NOT**
-exposed to the host or to clients. They're only reachable inside the Docker
-network. This is a security hardening over the upstream stack.
-
-### .env / subdomain mapping table
-
-| Variable | Client field | Caddy `Host:` | Internal target |
-|---|---|---|---|
-| `NOTESNOOK_APP_PUBLIC_URL` | Sync URL | `sync.example.com` | `notesnook-server:5264` |
-| `AUTH_SERVER_PUBLIC_URL` | Auth URL | `auth.example.com` | `identity-server:8264` |
-| `MONOGRAPH_PUBLIC_URL` | Web URL | `notes.example.com` / `example.com` | `monograph-server:3000` |
-| `ATTACHMENTS_SERVER_PUBLIC_URL` | Attachments URL | `attach.example.com` | `notesnook-s3:9000` |
-
-Never mix these up. The Android client uses the first three exactly as shown
-above. The web client uses `MONOGRAPH_PUBLIC_URL`.
-
-### Caddy internal routing
-
-| Host header | Routes to |
-|---|---|
-| `sync.example.com` | `notesnook-server:5264` |
-| `auth.example.com` | `identity-server:8264` |
-| `sse.example.com` | `sse-server:7264` |
-| `notes.example.com` / `example.com` | `monograph-server:3000` |
-| `attach.example.com` | `notesnook-s3:9000` (S3 API) |
-| `minio.example.com` | `notesnook-s3:9090` (MinIO console) |
-| `cors.example.com` | `cors-proxy:3000` |
-| `/attachments/*` / `/minio/*` (path) | `notesnook-s3:9000` (fallback) |
+| SMTP warning in logs | SMTP not configured | This is normal if you don't need email 2FA. Configure SMTP_* in `.env` if you want email-based 2FA or password reset. |
 
 ---
 
@@ -345,15 +465,6 @@ above. The web client uses `MONOGRAPH_PUBLIC_URL`.
 
 ---
 
-## What this fork changed from upstream
+## License
 
-1. `MONGODB_DATABASE_NAME` is honored by all repositories (upstream hardcoded "notesnook" for 7 collections).
-2. `NOTESNOOK_CORS_ORIGINS` env var is wired correctly (upstream read wrong key `NOTESNOOK_CORS`).
-3. Missing OAuth `profile` scope added in identity config (required by Notesnook 3.x OIDC flow).
-4. Per-service ASP.NET DataProtection key volumes instead of one shared `dpdata`.
-5. `init-dpdata` one-shot container fixes volume permissions automatically on first boot.
-6. MongoDB is NOT exposed on a host port.
-7. Healthchecks use `nc` / `node` / `bun` instead of `wget`.
-8. Image tags are pinned to immutable versions instead of `:latest`.
-9. `setup-s3` fails fast if `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` are missing.
-10. Caddy internal reverse proxy routes all traffic through a single port (8080).
+AGPLv3. See upstream LICENSE file.
