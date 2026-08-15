@@ -177,21 +177,13 @@ What you should see in order:
 
 ### 5. Verify
 
-Once all services show `(healthy)`, run the functional test:
+Once all services show `(healthy)`, test each subdomain through Caddy on port 8080. Replace `example.com` with your real `SERVER_DOMAIN`.
 
 ```bash
-bash test_functional.sh example.com
-```
-
-Expected output: **ALL CHECKS PASSED**.
-
-You can also test each subdomain manually through Caddy:
-
-```bash
-curl -fsS -H "Host: sync.example.com"   http://localhost:8080/health
 curl -fsS -H "Host: auth.example.com"   http://localhost:8080/health
+curl -fsS -H "Host: sync.example.com"   http://localhost:8080/health
 curl -fsS -H "Host: sse.example.com"    http://localhost:8080/health
-curl -fsS -H "Host: notes.example.com"  http://localhost:8080/api/health
+curl -fsS -H "Host: notes.example.com" http://localhost:8080/api/health
 curl -fsS -H "Host: example.com"        http://localhost:8080/api/health
 curl -fsS -H "Host: attach.example.com" http://localhost:8080/health
 curl -fsS -H "Host: minio.example.com"  http://localhost:8080/
@@ -199,6 +191,14 @@ curl -fsS -H "Host: cors.example.com"   http://localhost:8080/health
 ```
 
 Each should return `200` (or a valid page/JSON response).
+
+You can also run the smoke test script which checks health endpoints directly (bypasses Caddy):
+
+```bash
+bash test_functional.sh --install
+```
+
+Expected output: all services show `✓`.
 
 If your TLS proxy points at `localhost:8080`, these same commands work from
 the host. If from another machine, replace `localhost` with your server's IP.
