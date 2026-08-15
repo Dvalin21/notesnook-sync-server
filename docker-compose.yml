@@ -21,6 +21,7 @@ services:
       - -c
       - |
         required_vars=(
+          "SERVER_DOMAIN"
           "INSTANCE_NAME"
           "NOTESNOOK_API_SECRET"
           "DISABLE_SIGNUPS"
