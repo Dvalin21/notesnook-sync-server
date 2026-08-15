@@ -373,29 +373,6 @@ If the test fails:
 
 ---
 
-## Garage S3 (alternative to MinIO)
-
-This branch has experimental Garage S3 support as an alternative to MinIO.
-MinIO is the default and recommended backend. Garage is available if you
-need S3-compatible storage with a different storage engine.
-
-To use Garage instead of MinIO:
-
-```bash
-# Generate Garage credentials
-GARAGE_RPC_SECRET=$(openssl rand -base64 32)
-GARAGE_ACCESS_KEY_ID=$(openssl rand -base64 12)
-GARAGE_ACCESS_KEY_SECRET=$(openssl rand -base64 24)
-
-# Add them to .env
-# Then start with the Garage overlay
-docker compose -f docker-compose.yml -f examples/garage/docker-compose.garage.yml up -d
-```
-
-See `examples/garage/README.md` for details.
-
----
-
 ## Maintenance
 
 ### Backups
