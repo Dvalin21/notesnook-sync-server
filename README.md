@@ -102,31 +102,48 @@ This stack does **not** handle TLS itself. You need an external proxy that:
 2. Forwards all requests to `http://<your-server-ip>:8080`
 3. Preserves the original `Host:` header (this is how Caddy routes internally)
 
-**Caddy example** (use Caddyfile or any proxy):
+**Nginx Proxy Manager (NPM) — recommended:**
 
-```caddy
-*.example.com {
-    reverse_proxy localhost:8080
-}
-```
+1. In NPM, go to **Proxies → Add Proxy Host**
+2. Create **one proxy host** with these settings:
 
-**nginx example:**
+   | Field | Value |
+   |---|---|
+   | Domain Name | `*.example.com` (wildcard) |
+   | Forward Hostname / IP | `<your-server-ip>` |
+   | Forward Port | `8080` |
+   | Scheme | `http` |
+   | **Block common exploits** | On |
+   | **Websockets Support** | On |
+   | **Cache Assets** | Off (unless you know why) |
+   | **Force SSL** | On |
+   | **HTTP → HTTPS Redirect** | On |
+   | **SSL** | Request a new Lets Encrypt certificate (or enter your own) |
+   | **Secure** | On |
+   | **HSTS** | On (optional) |
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name *.example.com;
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-    location / {
-        proxy_pass http://localhost:8080;
-        proxy_set_header Host $host;
-    }
-}
-```
+3. **Critical:** In the Advanced tab, add this to ensure the Host header is preserved:
 
-**Cloudflare / AWS / any cloud LB:** Create a target group pointing to
-`http://<your-server-ip>:8080` with host header passthrough enabled.
+   ```
+   proxy_set_header Host $host;
+   proxy_set_header X-Real-IP $remote_addr;
+   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+   proxy_set_header X-Forwarded-Proto $scheme;
+   ```
+
+   NPM usually preserves the Host header by default, but if Caddy routing
+   breaks (502 errors), add this explicitly.
+
+4. Save. The proxy host will handle **all 8 subdomains** (`sync.`, `auth.`,
+   `sse.`, `notes.`, `example.com`, `attach.`, `minio.`, `cors.`) through a
+   single wildcard entry.
+
+5. If you prefer separate proxy hosts (one per subdomain), create 8 of them —
+   each pointing to `http://<your-server-ip>:8080`. The wildcard approach is
+   simpler and less error-prone.
+
+Caddy already handles the internal routing — NPM's job is just TLS termination
+and forwarding to port 8080. The Host header must reach Caddy unmodified.
 
 ### 4. Start the stack
 
