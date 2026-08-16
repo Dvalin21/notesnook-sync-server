@@ -6,16 +6,18 @@ DataProtection key persistence, and a single-port Caddy reverse proxy.
 
 One port, all traffic:
 
-```
-YOUR TLS PROXY :443  →  this host :8080  →  Caddy :80  →  by Host header:
-  sync.example.com     →  notesnook-server:5264
-  auth.example.com     →  identity-server:8264
-  sse.example.com      →  sse-server:7264
-  notes.example.com    →  monograph-server:3000
-  example.com          →  monograph-server:3000
-  attach.example.com   →  notesnook-s3:9000
-  minio.example.com    →  notesnook-s3:9090  (MinIO console — optional)
-  cors.example.com     →  cors-proxy:3000
+```  
+YOUR TLS PROXY :443  →  this host :8080  →  Caddy :80  →  by Host header:  
+  sync.example.com     →  notesnook-server:5264  
+  auth.example.com     →  identity-server:8264  
+  sse.example.com      →  sse-server:7264  
+  notes.example.com    →  monograph-server:3000  
+  example.com          →  monograph-server:3000  
+  attach.example.com   →  notesnook-s3:9000  
+  minio.example.com    →  notesnook-s3:9090  (MinIO console — optional)  
+  cors.example.com     →  cors-proxy:3000  
+  inbox.example.com    →  inbox-api:5181  (optional)  
+  themes.example.com   →  themes-server:9000  (optional)  
 ```
 
 Clients never touch internal ports. Everything behind 8080 is plain HTTP.
@@ -46,7 +48,7 @@ Your external proxy terminates TLS.
 |---|---|
 | **Docker + Docker Compose V2** | The whole stack runs in containers. `docker compose` (with a space, not `docker-compose`). |
 | **A domain you control** | All routing is by `Host:` header. You need `example.com` (replace with your real domain). |
-| **DNS** | Each subdomain below must resolve to your server's public IP. **Use a wildcard `*.example.com` A/AAAA record** — one record covers all 8. |
+|| **DNS** | Each subdomain below must resolve to your server's public IP. **Use a wildcard `*.example.com` A/AAAA record** — one record covers all 10. |
 | **A TLS-terminating reverse proxy** | Caddy, nginx, Nginx Proxy Manager, Apache, Traefik, HAProxy, or any cloud LB. This stack exposes port 8080 with plain HTTP; your proxy adds TLS. |
 | **Port 8080 open** | The stack publishes **one port**: `8080` on the host. Your TLS proxy connects here. |
 
@@ -69,8 +71,8 @@ This single record covers all subdomains the stack needs:
 | `example.com` | Web client (apex/root) |
 | `attach.example.com` | S3-compatible attachment storage (MinIO) |
 || `cors.example.com` | CORS proxy for external image embeds |
-|| `inbox.example.com` | Inbox API (optional) |
-|| `themes.example.com` | Themes server (optional) |
+|| `inbox.example.com` | Inbox API — accepts encrypted inbox notifications POSTed by the Notesnook app (optional) |
+|| `themes.example.com` | Themes server — serves theme metadata the Notesnook app fetches to render themed notes (optional) |
 
 **Optional:** `minio.example.com` → MinIO admin console (port 9090 internal, routed via Caddy).
 
@@ -162,7 +164,10 @@ Every `CHANGEME-*` value must be replaced. Here is every field explained:
 | `MINIO_ROOT_PASSWORD` | No — but `setup-s3` will fail if empty | Generate with `openssl rand -base64 22`. Not checked by `validate`; `setup-s3` refuses to start if blank. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | No — optional, warn if missing | Leave blank if not using email features |
 | `NOTESNOOK_CORS_ORIGINS` | No — used by `cors-proxy` only | Comma-separated origins, default `*`. Not checked by `validate`; the `cors-proxy` container receives it via env_file. |
-| `TWILIO_*` | No — optional, passed to all services | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SERVICE_SID` for SMS 2FA via `SMSSender`. Leave empty to disable SMS 2FA. |
+|| `TWILIO_*` | No — optional, passed to all services | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SERVICE_SID` for SMS 2FA via `SMSSender`. Leave empty to disable SMS 2FA. |
+|| `INBOX_API_PUBLIC_URL` | No — optional, used by Notesnook app only | Public HTTPS URL for the Inbox API (e.g. `https://inbox.example.com`). The Notesnook app POSTs encrypted inbox notifications here. Set to empty string `""` to disable. |
+|| `THEMES_SERVER_PUBLIC_URL` | No — optional, used by Notesnook app only | Public HTTPS URL for the Themes Server (e.g. `https://themes.example.com`). The Notesnook app queries this to fetch available theme metadata. Set to empty string `""` to disable. |
+|| `THEMES_REPO_URL` | No — optional, used by themes-server container only | Git clone URL for the themes repository. The themes-server clones this on startup and serves theme metadata from it. Default: upstream `streetwriters/notesnook-themes.git`. Change only if you host your own theme repo. |
 
 **MinIO credentials warning:** If `MINIO_ROOT_USER` or `MINIO_ROOT_PASSWORD` is empty,
 the `setup-s3` container will refuse to start. Generate strong values.
@@ -269,10 +274,9 @@ What you should see in order:
 8. **`sse-server`** starts on port 7264
 9. **`monograph-server`** starts on port 3000
 10. **`cors-proxy`** starts on port 3000
-11. **`setup-themes`** initializes themes data volume, then exits
-12. **`inbox-api`** starts on port 5181
-13. **`themes-server`** starts on port 9000
-14. **`caddy`** starts routing on port 80 (mapped to host port 8080)
+11. **`inbox-api`** starts on port 5181 (optional — set `INBOX_API_PUBLIC_URL` to enable)
+12. **`themes-server`** starts on port 9000 (optional — set `THEMES_SERVER_PUBLIC_URL` to enable)
+13. **`caddy`** starts routing on port 80 (mapped to host port 8080)
 
 **First boot takes 2-5 minutes.** MongoDB replica set initialization and
 .NET DataProtection key generation happen on first startup.
@@ -373,6 +377,54 @@ If the test fails:
 | SSL certificate error | Self-signed cert or wrong domain in URL | Make sure you're using `https://` with a valid certificate for the exact domain. |
 | "Invalid server" / "Not a Notesnook server" | The URL points to the wrong service or returns an error | Double-check that `AUTH_SERVER_PUBLIC_URL` points to `auth.example.com` (identity server), not the sync server. |
 | Signup fails after successful test | `DISABLE_SIGNUPS=true` or SMTP issue | Set `DISABLE_SIGNUPS=false` temporarily, restart identity-server, try again. |
+
+---
+
+## Optional services
+
+Two optional services are included in the stack: **inbox-api** and **themes-server**. They are not required for basic Notesnook sync functionality — the core stack (sync, auth, SSE, monograph, attachments, CORS) works without them.
+
+### Inbox API (`inbox.<domain>`)
+
+The Inbox API is a small Express service that receives encrypted inbox notifications from the Notesnook app and relays them to the sync server. It is used when one Notesnook user sends an inbox message to another.
+
+**What it does:**
+1. Receives a POST request with an encrypted payload and an API key
+2. Fetches the recipient's public encryption key from the sync server
+3. Re-encrypts the payload with that public key (OpenPGP / AES-256)
+4. Posts the encrypted blob back to the sync server's `/inbox/items` endpoint
+
+**How the app uses it:** The Notesnook app is configured with `INBOX_API_PUBLIC_URL` (e.g. `https://inbox.keithtechco.com`). When an inbox message is sent, the app POSTs to that URL. You do not browse this service — it has no web UI. The only endpoint is `POST /` (plus `GET /health` for health checks). `GET /` returns 404 by design — there is no GET handler.
+
+**Config:** Set `INBOX_API_PUBLIC_URL=https://inbox.<your-domain>` in `.env`. Leave it empty (`""`) to disable. The service is always started by Docker Compose; disabling is done by not pointing the app at it.
+
+**Internal URL:** The `NOTESNOOK_API_SERVER_URL` env var inside the container is set to `http://notesnook-server:5264` (the internal Docker network address). You do not need to set this in `.env` — it is already configured in `docker-compose.yml`.
+
+### Themes Server (`themes.<domain>`)
+
+The Themes Server is a TRPC service that clones the `notesnook-themes` Git repository and serves theme metadata to the Notesnook app. The app queries it to discover which themes are available for rendering notes.
+
+**What it does:**
+1. On startup, clones the Git repo specified by `THEMES_REPO_URL` into the container
+2. Generates metadata from the cloned themes
+3. Serves theme list/metadata via TRPC procedures over HTTP
+
+**How the app uses it:** The Notesnook app is configured with `THEMES_SERVER_PUBLIC_URL` (e.g. `https://themes.keithtechco.com`). The app makes TRPC calls to fetch the theme list. You do not browse this service — it has no web UI. `GET /` returns a TRPC 404 error by design — TRPC handles all requests through its procedure router, and there is no procedure registered for the empty path.
+
+**Config:** Set `THEMES_SERVER_PUBLIC_URL=https://themes.<your-domain>` in `.env`. Leave it empty (`""`) to disable. Set `THEMES_REPO_URL` to a different Git URL only if you host your own theme repository.
+
+**Data persistence:** The themes data (cloned Git repo + generated metadata) lives inside the container at `/app/notesnook-themes/`. It is re-cloned from `THEMES_REPO_URL` on every container start. The `themesdata` Docker volume persists only `installs.json` (usage tracking), which is optional.
+
+### Disabling optional services
+
+To run the stack without inbox-api and themes-server:
+
+1. Set `INBOX_API_PUBLIC_URL=""` and `THEMES_SERVER_PUBLIC_URL=""` in `.env`
+2. Remove the `inbox-api` and `themes-server` service blocks from `docker-compose.yml`
+3. Remove the `@inbox` and `@themes` handle blocks from `Caddyfile`
+4. Remove `inbox.<domain>` and `themes.<domain>` from your DNS
+
+Or leave the services running but unconfigured — they consume minimal resources and only serve requests when the app is pointed at them.
 
 ---
 
