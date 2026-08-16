@@ -96,15 +96,16 @@ network. This is a security hardening over the upstream stack.
 
 ### .env / subdomain mapping table
 
-| Variable | Client field | Caddy `Host:` | Internal target |
+| Variable | Client-facing | Caddy `Host:` | Internal target |
 |---|---|---|---|
-| `NOTESNOOK_APP_PUBLIC_URL` | Sync URL | `sync.example.com` | `notesnook-server:5264` |
-| `AUTH_SERVER_PUBLIC_URL` | Auth URL | `auth.example.com` | `identity-server:8264` |
-| `MONOGRAPH_PUBLIC_URL` | Web URL | `notes.example.com` / `example.com` | `monograph-server:3000` |
-| `ATTACHMENTS_SERVER_PUBLIC_URL` | Attachments URL | `attach.example.com` | `notesnook-s3:9000` |
+| `NOTESNOOK_APP_PUBLIC_URL` | **Yes** — Sync URL (Android + web) | `sync.example.com` | `notesnook-server:5264` |
+| `AUTH_SERVER_PUBLIC_URL` | **Yes** — Auth URL (Android + web) | `auth.example.com` | `identity-server:8264` |
+| `MONOGRAPH_PUBLIC_URL` | **Yes** — Web URL (web client only) | `notes.example.com` / `example.com` | `monograph-server:3000` |
+| `ATTACHMENTS_SERVER_PUBLIC_URL` | **No** — server-side only | `attach.example.com` | `notesnook-s3:9000` |
 
-Never mix these up. The Android client uses the first three exactly as shown
-above. The web client uses `MONOGRAPH_PUBLIC_URL`.
+The Android client has **exactly three** URL fields in Settings → Custom server:
+Sync URL, Auth URL, and Monograph URL. `ATTACHMENTS_SERVER_PUBLIC_URL` is **not**
+entered in the client — it is used server-side to generate S3 presigned URLs.
 
 ### MinIO / S3
 
@@ -115,6 +116,42 @@ The MinIO admin console runs on port 9090 internally. Caddy can route
 `minio.example.com` to it for admin access — this is optional.
 
 `setup-s3` creates the `attachments` bucket automatically on first boot.
+
+### How attachments work
+
+The Notesnook server has **two** S3 clients — one internal, one external:
+
+- **Internal client** (`S3_INTERNAL_SERVICE_URL` = `http://notesnook-s3:9000`):
+  Used by the server for server-side operations: initiating multipart uploads,
+  completing multipart uploads, deleting objects, and server-mediated uploads
+  (self-hosted mode). The client never sees this endpoint.
+
+- **External client** (`S3_SERVICE_URL` = `ATTACHMENTS_SERVER_PUBLIC_URL` =
+  `https://attach.example.com`): Used by the server to generate presigned URLs
+  that the client uses for downloads and multipart upload parts.
+
+**Upload (self-hosted):** Client sends the file to `PUT /s3?name=...` on the
+sync server. The server generates an internal presigned URL, PUTs the file to
+S3 itself, and returns `200 OK`. The client never talks to S3 directly for
+simple uploads.
+
+**Upload (multipart):** Client calls `POST /s3/multipart` to start. The server
+initiates the multipart upload internally, then returns presigned URLs for each
+part (generated with the external client / `ATTACHMENTS_SERVER_PUBLIC_URL`).
+The client uploads each part directly to those presigned S3 URLs.
+
+**Download:** Client calls `GET /s3?name=...`. The server generates a presigned
+download URL using the external client (`ATTACHMENTS_SERVER_PUBLIC_URL`) and
+returns it. The client downloads directly from that presigned S3 URL.
+
+**Delete:** Client calls `DELETE /s3?name=...`. The server deletes the object
+internally using the internal client.
+
+The key point: `ATTACHMENTS_SERVER_PUBLIC_URL` is **not** a client configuration
+field. The client enters only Sync, Auth, and Monograph URLs in Settings. The
+server uses `ATTACHMENTS_SERVER_PUBLIC_URL` internally to build presigned URLs
+that the client then consumes. If this URL is wrong, downloads and multipart
+uploads break; simple uploads may still work (server uses internal URL).
 
 ### Caddy internal routing
 
@@ -338,15 +375,15 @@ created in **your MongoDB** on your server — nothing goes to Notesnook's cloud
 Open the Notesnook app → Settings → Sync → "Use custom server" (or similar).
 Enter these exact values:
 
-| Field in app | Value |
+|| Field in app | Value |
 |---|---|
 | Auth URL / Identity server | `https://auth.example.com` |
 | Sync URL / Sync server | `https://sync.example.com` |
-| Attachments URL / S3 URL | `https://attach.example.com` |
 | Monograph URL (web only) | `https://notes.example.com` |
 
-After entering these, tap **Test connection** (if available), then **Save**.
-Then use **Sign up** or **Log in** to create your account.
+The Android client has exactly three URL fields. `ATTACHMENTS_SERVER_PUBLIC_URL`
+is **not** entered in Settings — the server uses it internally to generate S3
+presigned URLs that the client receives via the sync server's `/s3` endpoint.
 
 **Desktop app — Server URLs:**
 
@@ -487,7 +524,10 @@ done
 | MongoDB won't start / replica set fails | Long first boot | Wait 2-5 minutes. Check with `docker compose logs notesnook-db`. |
 | Caddy returns 502 | Backend not ready | Wait for all services to show `(healthy)` in `docker compose ps`. |
 | "invalid_grant" on OAuth | No account exists yet | Enable signups (`DISABLE_SIGNUPS=false`), create an account, then disable again. |
-| Can't connect from Android | Wrong URLs in app settings | Verify `NOTESNOOK_APP_PUBLIC_URL`, `AUTH_SERVER_PUBLIC_URL`, `ATTACHMENTS_SERVER_PUBLIC_URL` in `.env` exactly match what you put in the app. |
+[Verify `NOTESNOOK_APP_PUBLIC_URL`, `AUTH_SERVER_PUBLIC_URL` in `.env` exactly
+match what you put in the app. `ATTACHMENTS_SERVER_PUBLIC_URL` is server-side
+only — the client receives presigned URLs from the sync server, never enters
+it in Settings.]
 | `cors.example.com` shows JSON usage page | That's normal | The CORS proxy is an **API**, not a web page. `GET /` returns instructions. Use `GET /health` to check it's alive. |
 | Web client shows blank page | Monograph needs API_HOST | Check `docker compose logs monograph-server`. It should connect to `notesnook-server:5264`. |
 | Port conflict on 8080 | Another service uses that port | Change the host port in `docker-compose.yml` (e.g., `8080:80` → `8081:80`) and update your TLS proxy. |
