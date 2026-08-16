@@ -24,6 +24,8 @@
     @attach host attach.{$DOMAIN}
     @minio host minio.{$DOMAIN}
     @cors host cors.{$DOMAIN}
+    @inbox host inbox.{$DOMAIN}
+    @themes host themes.{$DOMAIN}
 
     handle @sync {
         reverse_proxy notesnook-server:5264
@@ -45,6 +47,12 @@
     }
     handle @cors {
         reverse_proxy cors-proxy:3000
+    }
+    handle @inbox {
+        reverse_proxy inbox-api:5181
+    }
+    handle @themes {
+        reverse_proxy themes-server:9000
     }
 
     # Path-based fallbacks (catch unmatched Host headers)

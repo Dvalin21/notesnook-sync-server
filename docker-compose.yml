@@ -321,6 +321,59 @@ services:
           cpus: "0.1"
           memory: 32M
 
+  setup-themes:
+    image: busybox:latest
+    restart: "no"
+    networks:
+      - notesnook
+    volumes:
+      - themesdata:/data
+    command: ['sh', '-c', 'if [ ! -f /data/installs.json ]; then echo "{}" > /data/installs.json; fi']
+
+  inbox-api:
+    image: streetwriters/notesnook-inbox:latest
+    restart: unless-stopped
+    networks:
+      - notesnook
+    depends_on:
+      notesnook-server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:5181/health').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 40s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    environment:
+      HOST: "0.0.0.0"
+      PORT: 5181
+      NOTESNOOK_API_SERVER_URL: "http://notesnook-server:5264"
+
+  themes-server:
+    image: streetwriters/themes-server:latest
+    restart: unless-stopped
+    networks:
+      - notesnook
+    depends_on:
+      setup-themes:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:9000/health').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 40s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    environment:
+      HOST: "0.0.0.0"
+      PORT: 9000
+      THEMES_REPO_URL: "https://github.com/streetwriters/notesnook-themes.git"
+    volumes:
+      - type: volume
+        source: themesdata
+        target: /installs.json
+        volume:
+          subpath: installs.json
+
   autoheal:
     image: willfarrell/autoheal:latest
     restart: always
@@ -343,3 +396,4 @@ volumes:
   dpdata-notesnook:
   dpdata-sse:
   dpdata-monograph:
+  themesdata:

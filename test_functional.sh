@@ -79,7 +79,7 @@ done
 # 7. Docker topology + exposure rules
 echo; echo "─── 7. Topology + exposure ───"
 COMPOSE="docker compose -f /home/keith/host/notesnook-sync-server/docker-compose.yml --env-file /home/keith/host/notesnook-sync-server/.env"
-for svc in notesnook-db notesnook-s3 identity-server notesnook-server sse-server monograph-server cors-proxy caddy autoheal; do
+for svc in notesnook-db notesnook-s3 identity-server notesnook-server sse-server monograph-server cors-proxy caddy autoheal inbox-api themes-server; do
   $COMPOSE ps --format '{{.Name}}' 2>/dev/null | grep -q "$svc" \
     && pass "service $svc running" \
     || fail "service $svc missing"
