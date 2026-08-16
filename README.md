@@ -68,7 +68,9 @@ This single record covers all subdomains the stack needs:
 | `notes.example.com` | Monograph web client |
 | `example.com` | Web client (apex/root) |
 | `attach.example.com` | S3-compatible attachment storage (MinIO) |
-| `cors.example.com` | CORS proxy for external image embeds |
+|| `cors.example.com` | CORS proxy for external image embeds |
+|| `inbox.example.com` | Inbox API (optional) |
+|| `themes.example.com` | Themes server (optional) |
 
 **Optional:** `minio.example.com` → MinIO admin console (port 9090 internal, routed via Caddy).
 
@@ -86,7 +88,7 @@ By design, this stack publishes **one port** externally: host `:8080`.
 Host :8080  →  Caddy :80  →  routes by Host header to correct backend
 ```
 
-Internal ports `5264` / `8264` / `7264` / `3000` / `9000` / `9090` are **NOT**
+Internal ports `5264` / `8264` / `7264` / `3000` / `9000` / `9090` / `5181` are **NOT**
 exposed to the host or to clients. They're only reachable inside the Docker
 network. This is a security hardening over the upstream stack.
 
@@ -122,7 +124,9 @@ The MinIO admin console runs on port 9090 internally. Caddy can route
 | `notes.example.com` / `example.com` | `monograph-server:3000` |
 | `attach.example.com` | `notesnook-s3:9000` (S3 API) |
 | `minio.example.com` | `notesnook-s3:9090` (MinIO console) |
-| `cors.example.com` | `cors-proxy:3000` |
+|| `cors.example.com` | `cors-proxy:3000` |
+|| `inbox.example.com` | `inbox-api:5181` |
+|| `themes.example.com` | `themes-server:9000` |
 
 ---
 
@@ -203,11 +207,11 @@ This stack does **not** handle TLS itself. You need an external proxy that:
    NPM usually preserves the Host header by default, but if Caddy routing
    breaks (502 errors), add this explicitly.
 
-4. Save. The proxy host will handle **all 8 subdomains** (`sync.`, `auth.`,
-   `sse.`, `notes.`, `example.com`, `attach.`, `minio.`, `cors.`) through a
+4. Save. The proxy host will handle **all 10 subdomains** (`sync.`, `auth.`,
+   `sse.`, `notes.`, `example.com`, `attach.`, `minio.`, `cors.`, `inbox.`, `themes.`) through a
    single wildcard entry.
 
-5. If you prefer separate proxy hosts (one per subdomain), create 8 of them —
+5. If you prefer separate proxy hosts (one per subdomain), create 10 of them —
    each pointing to `http://<your-server-ip>:8080`. The wildcard approach is
    simpler and less error-prone.
 
@@ -265,7 +269,10 @@ What you should see in order:
 8. **`sse-server`** starts on port 7264
 9. **`monograph-server`** starts on port 3000
 10. **`cors-proxy`** starts on port 3000
-11. **`caddy`** starts routing on port 80 (mapped to host port 8080)
+11. **`setup-themes`** initializes themes data volume, then exits
+12. **`inbox-api`** starts on port 5181
+13. **`themes-server`** starts on port 9000
+14. **`caddy`** starts routing on port 80 (mapped to host port 8080)
 
 **First boot takes 2-5 minutes.** MongoDB replica set initialization and
 .NET DataProtection key generation happen on first startup.
@@ -283,9 +290,14 @@ curl -fsS -H "Host: example.com"        http://localhost:8080/api/health
 curl -fsS -H "Host: attach.example.com" http://localhost:8080/health
 curl -fsS -H "Host: minio.example.com"  http://localhost:8080/
 curl -fsS -H "Host: cors.example.com"   http://localhost:8080/health
+curl -fsS -H "Host: inbox.example.com"  http://localhost:8080/health
+curl -fsS -H "Host: themes.example.com" http://localhost:8080/health
 ```
 
 Each should return `200` (or a valid page/JSON response).
+`attach.*` returns `403` without credentials — that's expected (S3 requires auth).
+`minio.*` returns the MinIO console HTML.
+`inbox.*` and `themes.*` return `200` from their health endpoints.
 
 You can also run the smoke test script which checks health endpoints directly (bypasses Caddy):
 
