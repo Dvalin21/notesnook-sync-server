@@ -74,6 +74,10 @@ services:
     networks:
       - notesnook
     command: --replSet rs0 --bind_ip_all
+    environment:
+      # ponytail: community workaround for SERVER-121912 (kernel 6.19+ vs vendored TCMalloc).
+      # Remove once MongoDB ships a fixed 8.x or host kernel >= 7.0.14.
+      GLIBC_TUNABLES: "glibc.pthread.rseq=1"
     depends_on:
       validate:
         condition: service_completed_successfully
