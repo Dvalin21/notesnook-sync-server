@@ -154,6 +154,7 @@ services:
     image: streetwriters/identity:v1.0-beta.32
     volumes:
       - dpdata-identity:/app/.aspnet/DataProtection-Keys
+      - keystore-data:/app/keystore
     networks:
       - notesnook
     env_file: *env-files
@@ -384,4 +385,5 @@ volumes:
   dpdata-notesnook:
   dpdata-sse:
   dpdata-monograph:
+  keystore-data:
   themesdata:

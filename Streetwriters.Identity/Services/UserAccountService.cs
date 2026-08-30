@@ -154,7 +154,7 @@ namespace Streetwriters.Identity.Services
                 var result = await userManager.CreateAsync(new User
                 {
                     Email = email,
-                    EmailConfirmed = Constants.IS_SELF_HOSTED,
+                    EmailConfirmed = false,
                     UserName = email,
                 }, password);
 
@@ -168,15 +168,12 @@ namespace Streetwriters.Identity.Services
                     {
                         await userManager.AddClaimAsync(user, new Claim(UserService.GetClaimKey(client.Id), "believer"));
                     }
-                    else
+                    if (userAgent != null) await userManager.AddClaimAsync(user, new Claim("platform", PlatformFromUserAgent(userAgent)));
+                    var code = await userManager.GenerateEmailConfirmationTokenAsync(user);
+                    var callbackUrl = UrlExtensions.TokenLink(user.Id.ToString(), code, client.Id, TokenType.CONFRIM_EMAIL);
+                    if (!string.IsNullOrEmpty(user.Email) && callbackUrl != null)
                     {
-                        if (userAgent != null) await userManager.AddClaimAsync(user, new Claim("platform", PlatformFromUserAgent(userAgent)));
-                        var code = await userManager.GenerateEmailConfirmationTokenAsync(user);
-                        var callbackUrl = UrlExtensions.TokenLink(user.Id.ToString(), code, client.Id, TokenType.CONFRIM_EMAIL);
-                        if (!string.IsNullOrEmpty(user.Email) && callbackUrl != null)
-                        {
-                            await emailSender.SendConfirmationEmailAsync(user.Email, callbackUrl, client);
-                        }
+                        await emailSender.SendConfirmationEmailAsync(user.Email, callbackUrl, client);
                     }
 
                     var response = await tokenGenerationService.CreateUserTokensAsync(user, client.Id, 3600);
