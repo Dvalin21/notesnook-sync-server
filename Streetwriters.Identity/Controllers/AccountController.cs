@@ -144,7 +144,7 @@ namespace Streetwriters.Identity.Controllers
 
         [HttpPost("verify")]
         [EnableRateLimiting("strict")]
-        public async Task<IActionResult> SendVerificationEmail([FromForm] string newEmail)
+        public async Task<IActionResult> SendVerificationEmail([FromForm] string? newEmail)
         {
             var client = Clients.FindClientById(User.FindFirstValue("client_id"));
             if (client == null) return BadRequest("Invalid client_id.");
