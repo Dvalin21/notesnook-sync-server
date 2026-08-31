@@ -67,7 +67,27 @@ namespace Notesnook.API.Authorization
             var isInAudience = User?.HasClaim("aud", "notesnook") ?? false;
             var hasRole = User?.HasClaim("role", "notesnook") ?? false;
 
-            if (hasSyncScope && isInAudience && hasRole)
+            var isEmailVerified = User?.HasClaim("verified", "true") ?? false;
+
+            if (!isEmailVerified)
+            {
+                var phrase = "continue";
+
+                foreach (var item in pathErrorPhraseMap)
+                {
+                    if (requestPath != null && requestPath.StartsWithSegments(item.Key))
+                        phrase = item.Value;
+                }
+
+                var error = $"Please confirm your email to {phrase}.";
+                var reason = new[]
+                {
+                    new AuthorizationFailureReason(this, error)
+                };
+                return PolicyAuthorizationResult.Forbid(AuthorizationFailure.Failed(reason));
+            }
+
+            if (hasSyncScope && isInAudience && hasRole && isEmailVerified)
                 return PolicyAuthorizationResult.Success(); //(requirement);
             return PolicyAuthorizationResult.Forbid();
         }
