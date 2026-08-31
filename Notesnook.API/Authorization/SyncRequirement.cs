@@ -69,7 +69,9 @@ namespace Notesnook.API.Authorization
 
             var isEmailVerified = User?.HasClaim("verified", "true") ?? false;
 
-            if (!isEmailVerified)
+            // Self-hosted: skip email verification gate (user owns the server)
+            // SaaS: require email verification before sync
+            if (!isEmailVerified && !Constants.IS_SELF_HOSTED)
             {
                 var phrase = "continue";
 
@@ -85,7 +87,6 @@ namespace Notesnook.API.Authorization
                     new AuthorizationFailureReason(this, error)
                 };
                 return PolicyAuthorizationResult.Forbid(AuthorizationFailure.Failed(reason));
-                //  context.Fail(new AuthorizationFailureReason(this, error));
             }
 
             if (hasSyncScope && isInAudience && hasRole && isEmailVerified)
