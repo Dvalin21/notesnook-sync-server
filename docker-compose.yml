@@ -55,6 +55,7 @@ services:
       - dpdata-identity:/data/identity
       - dpdata-notesnook:/data/notesnook
       - dpdata-sse:/data/sse
+      - keystore-data:/data/keystore
     depends_on:
       validate:
         condition: service_completed_successfully
@@ -63,7 +64,7 @@ services:
       - -c
       - |
         echo "Setting DataProtection volume permissions..."
-        chown -R 1000:1000 /data/identity /data/notesnook /data/sse
+        chown -R 1000:1000 /data/identity /data/notesnook /data/sse /data/keystore
         echo "Done."
 
   notesnook-db:
