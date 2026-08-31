@@ -154,7 +154,7 @@ namespace Streetwriters.Identity.Services
                 var result = await userManager.CreateAsync(new User
                 {
                     Email = email,
-                    EmailConfirmed = Constants.IS_SELF_HOSTED,
+                    EmailConfirmed = false,
                     UserName = email,
                 }, password);
 
