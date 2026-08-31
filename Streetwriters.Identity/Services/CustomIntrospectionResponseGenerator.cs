@@ -61,9 +61,7 @@ namespace Streetwriters.Identity.Services
                     if (claim.ClaimType == null || claim.ClaimType == "verified" || claim.ClaimType == "hcli") return;
                     result.TryAdd(claim.ClaimType, claim.ClaimValue);
                 });
-                // Self-hosted: always report email as verified (user owns the server)
-                // Otherwise: report actual confirmation status
-                result.TryAdd("verified", Constants.IS_SELF_HOSTED ? "true" : user.EmailConfirmed.ToString().ToLowerInvariant());
+                result.TryAdd("verified", user.EmailConfirmed.ToString().ToLowerInvariant());
             }
             return result;
         }
