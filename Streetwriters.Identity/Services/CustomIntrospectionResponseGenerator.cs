@@ -27,6 +27,7 @@ using IdentityServer4.Services;
 using IdentityServer4.Validation;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Logging;
+using Streetwriters.Common;
 using Streetwriters.Common.Models;
 
 namespace Streetwriters.Identity.Services
@@ -60,7 +61,9 @@ namespace Streetwriters.Identity.Services
                     if (claim.ClaimType == null || claim.ClaimType == "verified" || claim.ClaimType == "hcli") return;
                     result.TryAdd(claim.ClaimType, claim.ClaimValue);
                 });
-                result.TryAdd("verified", user.EmailConfirmed.ToString().ToLowerInvariant());
+                // Self-hosted: always report email as verified (user owns the server)
+                // Otherwise: report actual confirmation status
+                result.TryAdd("verified", Constants.IS_SELF_HOSTED ? "true" : user.EmailConfirmed.ToString().ToLowerInvariant());
             }
             return result;
         }
