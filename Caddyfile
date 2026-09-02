@@ -5,7 +5,7 @@
 # TLS is handled by your external proxy — Caddy does plain HTTP internally.
 
 {
-    # Disable automatic HTTPS — we're behind a TLS-terminating proxy
+    # Disable automatic HTTPS — we are behind a TLS-terminating proxy
     auto_https off
     admin off
 }
@@ -28,39 +28,61 @@
     @themes host themes.{$DOMAIN}
 
     handle @sync {
-        reverse_proxy notesnook-server:5264
+        reverse_proxy notesnook-server:5264 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
     handle @auth {
-        reverse_proxy identity-server:8264
+        reverse_proxy identity-server:8264 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
     handle @sse {
-        reverse_proxy sse-server:7264
+        reverse_proxy sse-server:7264 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
     handle @monograph {
-        reverse_proxy monograph-server:3000
+        reverse_proxy monograph-server:3000 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
     handle @attach {
-        reverse_proxy notesnook-s3:9000
+        reverse_proxy notesnook-s3:9000 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
     handle @minio {
-        reverse_proxy notesnook-s3:9090
+        reverse_proxy notesnook-s3:9090 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
     handle @cors {
-        reverse_proxy cors-proxy:3000
+        reverse_proxy cors-proxy:3000 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
     handle @inbox {
-        reverse_proxy inbox-api:5181
+        reverse_proxy inbox-api:5181 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
     handle @themes {
-        reverse_proxy themes-server:9000
+        reverse_proxy themes-server:9000 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
 
     # Path-based fallbacks (catch unmatched Host headers)
     @s3-path path /attachments/* /minio/*
     handle @s3-path {
-        reverse_proxy notesnook-s3:9000
+        reverse_proxy notesnook-s3:9000 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
     }
 
     # Default: serve monograph (web client)
-    reverse_proxy monograph-server:3000
+    reverse_proxy monograph-server:3000 {
+        header_up X-Forwarded-Host {http.request.host}
+    }
 }
