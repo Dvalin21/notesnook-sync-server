@@ -1,7 +1,7 @@
 # HANDOFF — notesnook-sync-server (MinIO edition)
 
 ## Current state (2026-08-31)
-- **Domain**: `example.com` (not example.com)
+- **Domain**: `example.com`
 - **Stack**: 12 services running from pre-built Docker Hub images
 - **Repo**: `/home/keith/host/notesnook-sync-server`
 - **Branch**: `master`, up to date with `origin/master`
@@ -92,7 +92,7 @@ MONOGRAPH_PUBLIC_URL=https://notes.example.com
 ATTACHMENTS_SERVER_PUBLIC_URL=https://attach.example.com
 SMTP_HOST=smtp.example.com
 SMTP_PORT=587
-SMTP_USERNAME=dvalin21@gmail.com
+SMTP_USERNAME=alerts@example.com
 MINIO_ROOT_USER=MinioKeith
 ```
 
