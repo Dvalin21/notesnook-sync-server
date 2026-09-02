@@ -102,7 +102,7 @@ namespace Streetwriters.Identity.Services
                 Html = Email2FATemplate.Html,
                 Text = Email2FATemplate.Text,
                 Subject = Email2FATemplate.Subject,
-                Data = new { app_name = client.Name, code },
+                Data = new { app_name = client.Name, code, support_email = Constants.SUPPORT_EMAIL },
             };
             await EmailSender.SendEmailAsync(email, template, new System.Net.Mail.MailAddress(client.SenderEmail, client.SenderName), NNGnuPGContext);
         }
@@ -118,7 +118,7 @@ namespace Streetwriters.Identity.Services
                 Html = ConfirmEmailTemplate.Html,
                 Text = ConfirmEmailTemplate.Text,
                 Subject = ConfirmEmailTemplate.Subject,
-                Data = new { app_name = client.Name, confirm_link = callbackUrl },
+                Data = new { app_name = client.Name, confirm_link = callbackUrl, support_email = Constants.SUPPORT_EMAIL },
             };
             await EmailSender.SendEmailAsync(email, template, new System.Net.Mail.MailAddress(client.SenderEmail, client.SenderName), NNGnuPGContext);
         }
@@ -134,7 +134,7 @@ namespace Streetwriters.Identity.Services
                 Html = ConfirmChangeEmailTemplate.Html,
                 Text = ConfirmChangeEmailTemplate.Text,
                 Subject = ConfirmChangeEmailTemplate.Subject,
-                Data = new { app_name = client.Name, code },
+                Data = new { app_name = client.Name, code, support_email = Constants.SUPPORT_EMAIL },
             };
             await EmailSender.SendEmailAsync(email, template, new System.Net.Mail.MailAddress(client.SenderEmail, client.SenderName), NNGnuPGContext);
         }
@@ -150,7 +150,7 @@ namespace Streetwriters.Identity.Services
                 Html = PasswordResetEmailTemplate.Html,
                 Text = PasswordResetEmailTemplate.Text,
                 Subject = PasswordResetEmailTemplate.Subject,
-                Data = new { app_name = client.Name, reset_link = callbackUrl },
+                Data = new { app_name = client.Name, reset_link = callbackUrl, support_email = Constants.SUPPORT_EMAIL },
             };
             await EmailSender.SendEmailAsync(email, template, new System.Net.Mail.MailAddress(client.SenderEmail, client.SenderName), NNGnuPGContext);
         }
@@ -166,6 +166,7 @@ namespace Streetwriters.Identity.Services
                 {
                     app_name = client.Name,
                     device_info = deviceInfo.Replace("\n", "<br>"),
+                    support_email = Constants.SUPPORT_EMAIL,
                 },
             };
             await EmailSender.SendEmailAsync(email, template, new System.Net.Mail.MailAddress(client.SenderEmail, client.SenderName), NNGnuPGContext);

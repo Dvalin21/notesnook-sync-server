@@ -44,6 +44,7 @@ namespace Streetwriters.Common
         public static string? SMTP_PORT => ReadSecret("SMTP_PORT");
         public static string? SMTP_REPLYTO_EMAIL => ReadSecret("SMTP_REPLYTO_EMAIL");
         public static string? NOTESNOOK_SENDER_EMAIL => ReadSecret("NOTESNOOK_SENDER_EMAIL") ?? ReadSecret("SMTP_USERNAME");
+        public static string? SUPPORT_EMAIL => ReadSecret("SUPPORT_EMAIL") ?? ReadSecret("SMTP_REPLYTO_EMAIL") ?? ReadSecret("SMTP_USERNAME");
 
         public static string? NOTESNOOK_APP_HOST => ReadSecret("NOTESNOOK_APP_HOST");
         public static string NOTESNOOK_API_SECRET => ReadSecret("NOTESNOOK_API_SECRET") ?? throw new InvalidOperationException("NOTESNOOK_API_SECRET is required");
