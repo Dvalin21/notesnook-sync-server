@@ -8,6 +8,7 @@ using MailKit.Net.Smtp;
 using MimeKit;
 using MimeKit.Cryptography;
 using Org.BouncyCastle.Bcpg;
+using Org.BouncyCastle.Bcpg.OpenPgp;
 using Scriban;
 using Streetwriters.Common.Interfaces;
 using Streetwriters.Common.Models;
@@ -93,7 +94,15 @@ namespace Streetwriters.Common.Services
                     }
                 }
 
-                var key = gpgContext?.GetSigningKey(sender);
+                PgpSecretKey key = null;
+                try
+                {
+                    key = gpgContext?.GetSigningKey(sender);
+                }
+                catch (PrivateKeyNotFoundException)
+                {
+                    // ponytail: no GPG keyring available, send without signing
+                }
                 if (key != null)
                 {
                     using (MemoryStream outputStream = new())
