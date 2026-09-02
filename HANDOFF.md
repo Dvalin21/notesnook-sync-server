@@ -1,7 +1,7 @@
 # HANDOFF — notesnook-sync-server (MinIO edition)
 
 ## Current state (2026-08-31)
-- **Domain**: `houseofmanns.com` (not keithtechco.com)
+- **Domain**: `example.com`
 - **Stack**: 12 services running from pre-built Docker Hub images
 - **Repo**: `/home/keith/host/notesnook-sync-server`
 - **Branch**: `master`, up to date with `origin/master`
@@ -35,8 +35,8 @@
 
 ### ISSUE 2 — Confirm link goes to wrong domain
 **Status:** Under investigation
-**Problem:** Email confirm button redirects to `auth.streetwriters.co` instead of `auth.houseofmanns.com`
-**Expected:** `IDENTITY_SERVER_URL=https://auth.houseofmanns.com` is set correctly in container env
+**Problem:** Email confirm button redirects to `auth.streetwriters.co` instead of `auth.example.com`
+**Expected:** `IDENTITY_SERVER_URL=https://auth.example.com` is set correctly in container env
 **Possible cause:** The pre-built image may have a hardcoded fallback or the `TokenLink` method has a bug when `IDENTITY_SERVER_URL` has a path
 
 ### ISSUE 3 — Attachments not syncing to MinIO
@@ -86,13 +86,13 @@ Then: `docker compose down`, remove `s3data` volume, `docker compose up -d`
 ## Environment (.env)
 ```
 SELF_HOSTED=1 (set to 0 for email confirmation to work)
-AUTH_SERVER_PUBLIC_URL=https://auth.houseofmanns.com
-NOTESNOOK_APP_PUBLIC_URL=https://sync.houseofmanns.com
-MONOGRAPH_PUBLIC_URL=https://notes.houseofmanns.com
-ATTACHMENTS_SERVER_PUBLIC_URL=https://attach.houseofmanns.com
-SMTP_HOST=smtp.houseofmanns.com
+AUTH_SERVER_PUBLIC_URL=https://auth.example.com
+NOTESNOOK_APP_PUBLIC_URL=https://sync.example.com
+MONOGRAPH_PUBLIC_URL=https://notes.example.com
+ATTACHMENTS_SERVER_PUBLIC_URL=https://attach.example.com
+SMTP_HOST=smtp.example.com
 SMTP_PORT=587
-SMTP_USERNAME=support@keithtechco.com
+SMTP_USERNAME=alerts@example.com
 MINIO_ROOT_USER=MinioKeith
 ```
 
@@ -106,7 +106,7 @@ docker compose up -d caddy
 ```
 
 ## DNS required (10 subdomains)
-`*.houseofmanns.com` wildcard A record → server IP covers: sync, auth, sse, notes, attach, minio, cors, inbox, themes, plus apex.
+`*.example.com` wildcard A record → server IP covers: sync, auth, sse, notes, attach, minio, cors, inbox, themes, plus apex.
 
 ## Key files
 - `docker-compose.yml` — 12 services, MinIO S3 backend
@@ -124,5 +124,5 @@ docker compose up -d caddy
 - All services use pre-built Docker Hub images (not built from source)
 - Source code changes in this repo do NOT affect running containers unless rebuilt
 - MongoDB: single-node replica set (`rs0`)
-- S3: MinIO at `notesnook-s3:9000` (internal), exposed via Caddy at `attach.houseofmanns.com`
+- S3: MinIO at `notesnook-s3:9000` (internal), exposed via Caddy at `attach.example.com`
 - Identity: IdentityServer4 with PGP signing keys in `keystore-data` volume
