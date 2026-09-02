@@ -68,7 +68,7 @@ services:
         echo "Done."
 
   notesnook-db:
-    image: mongo:8.0.28
+    image: mongo:8.0.29
     hostname: notesnook-db
     volumes:
       - dbdata:/data/db
