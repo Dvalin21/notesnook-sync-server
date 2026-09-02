@@ -35,6 +35,9 @@ FROM --platform=$BUILDPLATFORM base AS final
 ARG TARGETARCH
 ARG BUILDPLATFORM
 
+# Install gnupg for PGP email signing
+RUN apk add --no-cache gnupg
+
 # create a new user and change directory ownership
 RUN adduser --disabled-password \
   --home /app \
@@ -45,4 +48,8 @@ USER dotnetuser
 WORKDIR /app
 
 COPY --from=publish /app/publish .
-ENTRYPOINT ["./Streetwriters.Identity"]
+USER root
+COPY --from=build /src/Streetwriters.Identity/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh && chown dotnetuser:dotnetuser /app/entrypoint.sh
+USER dotnetuser
+ENTRYPOINT ["./entrypoint.sh"]
