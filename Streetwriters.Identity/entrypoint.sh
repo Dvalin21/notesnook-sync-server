@@ -8,6 +8,10 @@ KEYSTORE_DIR="/app/keystore"
 mkdir -p "$GPG_HOME"
 chmod 700 "$GPG_HOME"
 
+# Use SMTP_USERNAME as the GPG key email (matches sender address)
+GPG_EMAIL="${SMTP_USERNAME:-support@notesnook.com}"
+GPG_NAME="${SMTP_FROM_NAME:-Notesnook}"
+
 # Check if we already have a private key
 if ! gpg --homedir "$GPG_HOME" --list-secret-keys 2>/dev/null | grep -q "sec"; then
     echo "No GPG key found, generating..."
@@ -19,8 +23,8 @@ Key-Type: RSA
 Key-Length: 2048
 Subkey-Type: RSA
 Subkey-Length: 2048
-Name-Real: Notesnook
-Name-Email: support@notesnook.com
+Name-Real: $GPG_NAME
+Name-Email: $GPG_EMAIL
 Expire-Date: 0
 %no-protection
 %commit
