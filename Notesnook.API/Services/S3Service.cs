@@ -59,7 +59,7 @@ namespace Notesnook.API.Services
         // SignatureDoesNotMatch error.
         // That is why we create 2 separate S3 clients. One for internal traffic and one for external.
         private readonly S3FailoverHelper S3InternalClient;
-        private static readonly HttpClient HttpClient = new();
+        public static readonly HttpClient HttpClient = new();
 
         public S3Service(ISyncItemsRepositoryAccessor syncItemsRepositoryAccessor, WampServiceAccessor wampServiceAccessor, ILogger<S3Service> logger)
         {

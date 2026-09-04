@@ -239,10 +239,19 @@ const server = Bun.serve({
 
     // Handle CORS preflight
     if (req.method === "OPTIONS") {
+      const requestOrigin = req.headers.get("origin");
+      let allowOrigin = corsOrigin;
+      if (requestOrigin && ALLOWED_ORIGINS.length > 0 && ALLOWED_ORIGINS.includes(requestOrigin)) {
+        allowOrigin = requestOrigin;
+      }
+      const preflightHeaders = {
+        ...corsHeaders,
+        "Access-Control-Allow-Origin": allowOrigin,
+      };
       logRequest(req.method, url.pathname, 204);
       return new Response(null, {
         status: 204,
-        headers: corsHeaders,
+        headers: preflightHeaders,
       });
     }
 
@@ -347,11 +356,11 @@ const server = Bun.serve({
   },
 });
 
-console.log(
-  `🚀 CORS Proxy Server running on http://${server.hostname}:${server.port}`,
-);
-console.log(`📋 Health check: http://${server.hostname}:${server.port}/health`);
-console.log(`🌍 Environment: ${Bun.env.NODE_ENV || "development"}`);
+console.log(`CORS Proxy Server running on http://${HOST}:${PORT}`);
+console.log(`Health check: http://${HOST}:${PORT}/health`);
+console.log(`Environment: ${Bun.env.NODE_ENV || "development"}`);
+console.log(`Allowed origins: ${ALLOWED_ORIGINS.join(", ") || "*"}`);
+console.log(`Allowed domains: ${ALLOWED_DOMAINS.length > 0 ? ALLOWED_DOMAINS.join(", ") : "none"}`);
 
 /**
  * This is required to bypass YouTube's Referrer Policy restrictions when

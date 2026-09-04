@@ -225,12 +225,6 @@ namespace Streetwriters.Identity
 
             app.UseRouting();
 
-            app.UseIdentityServer();
-            app.UseRateLimiter();
-
-            app.UseAuthentication();
-            app.UseAuthorization();
-
             app.UseWamp(WampServers.IdentityServer, (realm, server) =>
             {
                 realm.Services.RegisterCallee(() => app.ApplicationServices.CreateScope().ServiceProvider.GetRequiredService<IUserAccountService>());
@@ -256,11 +250,19 @@ namespace Streetwriters.Identity
                 });
             });
 
+            app.UseIdentityServer();
+            app.UseRateLimiter();
+
+            app.UseAuthentication();
+            app.UseAuthorization();
+
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers();
                 endpoints.MapHealthChecks("/health");
             });
+
+            Console.WriteLine("[Startup] Pipeline configured successfully");
         }
 
         private static void AddOperationalStore(IServiceCollection services, TokenCleanupOptions? tokenCleanUpOptions = null)
