@@ -17,6 +17,7 @@ You should have received a copy of the Affero GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using AspNetCore.Identity.Mongo.Model;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -40,16 +41,18 @@ namespace Streetwriters.Identity.Validation
     public class EmailGrantValidator : IExtensionGrantValidator
     {
         private UserManager<User> UserManager { get; set; }
+        private RoleManager<MongoRole> RoleManager { get; set; }
         private SignInManager<User> SignInManager { get; set; }
         private IMFAService MFAService { get; set; }
         private ITokenGenerationService TokenGenerationService { get; set; }
         private JwtRequestValidator JWTRequestValidator { get; set; }
         private IResourceStore ResourceStore { get; set; }
         private IUserClaimsPrincipalFactory<User> PrincipalFactory { get; set; }
-        public EmailGrantValidator(UserManager<User> userManager, SignInManager<User> signInManager, IMFAService mfaService, ITokenGenerationService tokenGenerationService,
+        public EmailGrantValidator(UserManager<User> userManager, RoleManager<MongoRole> roleManager, SignInManager<User> signInManager, IMFAService mfaService, ITokenGenerationService tokenGenerationService,
         IResourceStore resourceStore, IUserClaimsPrincipalFactory<User> principalFactory)
         {
             UserManager = userManager;
+            RoleManager = roleManager;
             SignInManager = signInManager;
             MFAService = mfaService;
             TokenGenerationService = tokenGenerationService;
@@ -64,7 +67,8 @@ namespace Streetwriters.Identity.Validation
         {
             var email = context.Request.Raw["email"];
             var clientId = context.Request.ClientId;
-            var user = await UserManager.FindRegisteredUserAsync(email, clientId) ?? new User
+            var existingUser = await UserManager.FindRegisteredUserAsync(email, clientId);
+            var user = existingUser ?? new User
             {
                 Id = MongoDB.Bson.ObjectId.GenerateNewId(),
                 Email = email,
@@ -74,6 +78,24 @@ namespace Streetwriters.Identity.Validation
                 EmailConfirmed = false,
                 SecurityStamp = ""
             };
+
+            // Save new user to database so MFA grant can find them
+            if (existingUser == null)
+            {
+                // Ensure role exists before creating user
+                if (await RoleManager.FindByNameAsync(clientId) == null)
+                {
+                    await RoleManager.CreateAsync(new MongoRole(clientId));
+                }
+
+                var createResult = await UserManager.CreateAsync(user);
+                if (!createResult.Succeeded)
+                {
+                    context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant);
+                    return;
+                }
+                await UserManager.AddToRoleAsync(user, clientId);
+            }
 
             var isMultiFactor = await UserManager.GetTwoFactorEnabledAsync(user);
 
