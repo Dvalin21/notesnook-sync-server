@@ -2,17 +2,23 @@
 set -e
 
 GPG_HOME="/app/.gnupg"
-KEYSTORE_DIR="/app/keystore"
+GPG_BACKUP="/app/keystore/.gnupg"
 
 # Initialize GPG directory
-mkdir -p "$GPG_HOME"
-chmod 700 "$GPG_HOME"
+mkdir -p "$GPG_HOME" "$GPG_BACKUP"
+chmod 700 "$GPG_HOME" "$GPG_BACKUP"
 
 # Use SMTP_USERNAME as the GPG key email (matches sender address)
 GPG_EMAIL="${SMTP_USERNAME:-support@notesnook.com}"
 GPG_NAME="${SMTP_FROM_NAME:-Notesnook}"
 
-# Check if we already have a private key
+# Restore GPG key from keystore backup if available
+if [ -f "$GPG_BACKUP/pubring.kbx" ] || [ -f "$GPG_BACKUP/pubring.gpg" ]; then
+    echo "Restoring GPG key from keystore backup..."
+    cp -a "$GPG_BACKUP"/* "$GPG_HOME"/ 2>/dev/null || true
+fi
+
+# Check if we have a private key
 if ! gpg --homedir "$GPG_HOME" --list-secret-keys 2>/dev/null | grep -q "sec"; then
     echo "No GPG key found, generating..."
 
@@ -34,6 +40,10 @@ EOF
     gpg --homedir "$GPG_HOME" --batch --gen-key "$GPG_HOME/gen_key_script" 2>/dev/null
     rm -f "$GPG_HOME/gen_key_script"
     echo "PGP key generated successfully"
+
+    # Backup to keystore for persistence across restarts
+    cp -a "$GPG_HOME"/* "$GPG_BACKUP"/ 2>/dev/null || true
+    echo "GPG key backed up to keystore"
 else
     echo "Using existing GPG key"
 fi

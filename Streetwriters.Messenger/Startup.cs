@@ -111,26 +111,6 @@ namespace Streetwriters.Messenger
             };
             app.MapServerSentEvents("/sse", options);
 
-            app.UseWamp(WampServers.MessengerServer, (realm, server) =>
-            {
-                IServerSentEventsService service = app.ApplicationServices.GetRequiredService<IServerSentEventsService>();
-                realm.Subscribe<SendSSEMessage>(MessengerServerTopics.SendSSETopic, async (ev) =>
-                {
-                    var message = JsonSerializer.Serialize(ev.Message);
-                    if (ev.SendToAll)
-                    {
-                        await SSEHelper.SendEventToAllUsersAsync(message, service);
-                    }
-                    else
-                    {
-                        await SSEHelper.SendEventToUserAsync(message, service, ev.UserId, ev.OriginTokenId);
-                    }
-                });
-
-                IDistributedCache cache = app.GetScopedService<IDistributedCache>();
-                realm.Subscribe<ClearCacheMessage>(IdentityServerTopics.ClearCacheTopic, (ev) => ev.Keys.ForEach((key) => cache.Remove(key)));
-            });
-
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers();

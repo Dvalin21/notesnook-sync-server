@@ -1,128 +1,172 @@
 # HANDOFF — notesnook-sync-server (MinIO edition)
 
-## Current state (2026-08-31)
-- **Domain**: `example.com`
-- **Stack**: 12 services running from pre-built Docker Hub images
+## Current state (2026-09-03)
+- **Stack**: 12 services running from pre-built Docker Hub images + local debug builds
 - **Repo**: `/home/keith/host/notesnook-sync-server`
-- **Branch**: `master`, up to date with `origin/master`
-- **Last commit**: `476803f` (fix: require email confirmation before sync)
+- **Branch**: `master`
+- **Domain**: houseofmanns.com (updated from keithtechco.com)
 
-## What's running
-| Service | Image | Status |
-|---------|-------|--------|
-| caddy | caddy:alpine | OK (port 8080) |
-| notesnook-db | mongo:8.0.28 | OK |
-| notesnook-s3 (MinIO) | minio/minio:RELEASE.2025-09-07T16-13-09Z | OK |
-| identity-server | streetwriters/identity:v1.0-beta.32 | Running (pre-built) |
-| notesnook-server | streetwriters/notesnook-sync:v1.0-beta.32 | Running (pre-built) |
-| sse-server | streetwriters/sse:v1.0-beta.32 | Running |
-| monograph-server | streetwriters/monograph:1.3.1 | Running |
-| inbox-api | streetwriters/notesnook-inbox:latest | Running |
-| themes-server | streetwriters/themes-server:latest | Running |
-| cors-proxy | custom build | Running |
-| autoheal | willfarrell/autoheal:latest | Running |
+## Custom images pushed to Docker Hub
 
-## Known issues (ACTIVE)
+| Image | Status | Notes |
+|-------|--------|-------|
+| dvalin21/notesnook-identity:latest | **Updated** | Fixed signup flow, GPG persistence |
+| dvalin21/notesnook-sync:latest | **Updated** | Fixed WAMP, S3 controller |
+| dvalin21/notesnook-sse:latest | **Updated** | Removed WAMP (incompatible with .NET 9) |
+| dvalin21/notesnook-cors-proxy:latest | Updated | Custom CORS proxy |
+| dvalin21/minio-notesnook:latest | Updated | Security patches |
 
-### ISSUE 1 — Email confirmation not sent for self-hosted
-**Status:** Root cause identified, fix requires image rebuild
-**Problem:** Pre-built `streetwriters/identity:v1.0-beta.32` image skips sending confirmation emails when `SELF_HOSTED=1`. The original code only sends emails for SaaS (`SELF_HOSTED=0`).
-**Evidence:** User receives 2FA emails (works) but not signup confirmation emails. Setting `SELF_HOSTED=0` makes confirmation emails work.
-**Fix options:**
-1. Set `SELF_HOSTED=0` in `.env` (simplest, but changes other behavior)
-2. Rebuild identity-server from source with fix always sending email
-**Workaround:** Use `SELF_HOSTED=0` for now
+## What's running (11 services + 1 one-shot)
+| Service | Image | Status | Port |
+|---------|-------|--------|------|
+| caddy | caddy:alpine | ✅ OK | 8080 |
+| notesnook-db | mongo:8.0.29 | ✅ OK | 27017 |
+| notesnook-s3 (MinIO) | minio/minio:RELEASE.2025-09-07T16-13-09Z | ✅ OK | 9000 |
+| identity-server | dvalin21/notesnook-identity:latest | ✅ **Fixed** | 8264 |
+| notesnook-server | dvalin21/notesnook-sync:latest | ✅ **Fixed** | 5264 |
+| sse-server | dvalin21/notesnook-sse:latest | ✅ **Fixed** | 7264 |
+| monograph-server | streetwriters/monograph:1.3.1 | ✅ OK | 3000 |
+| inbox-api | streetwriters/notesnook-inbox:latest | ✅ OK | 5181 |
+| themes-server | streetwriters/themes-server:latest | ✅ OK | 900 |
+| cors-proxy | dvalin21/notesnook-cors-proxy:latest | ✅ OK | 3000 |
+| autoheal | willfarrell/autoheal:latest | ✅ OK | - |
 
-### ISSUE 2 — Confirm link goes to wrong domain
-**Status:** Under investigation
-**Problem:** Email confirm button redirects to `auth.streetwriters.co` instead of `auth.example.com`
-**Expected:** `IDENTITY_SERVER_URL=https://auth.example.com` is set correctly in container env
-**Possible cause:** The pre-built image may have a hardcoded fallback or the `TokenLink` method has a bug when `IDENTITY_SERVER_URL` has a path
+---
 
-### ISSUE 3 — Attachments not syncing to MinIO
-**Status:** Root cause identified, fix pending
-**Problem:** Attachments saved locally on tablet but never appear in MinIO `attachments` bucket
-**Root cause:** `notesnook-s3` service in `docker-compose.yml` is missing `env_file` and explicit `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` environment variables. MinIO starts with random/default credentials instead of `.env` values.
-**Evidence:** Container env shows `MINIO_ROOT_USER=MinioKeith` but `.env` has different value. `setup-s3` creates bucket with `.env` creds but MinIO runs with different creds.
-**Fix:** Add to `notesnook-s3` service in `docker-compose.yml`:
-```yaml
-environment:
-  MINIO_BROWSER: "on"
-  MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
-  MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+## Root Cause Analysis & Fixes Applied
+
+### ISSUE 1 — Database Not Populated (Signup Fails)
+**Status: ✅ FIXED**
+
+**Root Cause:** `EmailGrantValidator` created user in memory but never saved to MongoDB. MFA grant then failed with "user not found."
+
+**Files changed:**
+- `Streetwriters.Identity/Validation/EmailGrantValidator.cs`
+  - Added `UserManager.CreateAsync(user)` to persist new users
+  - Added `RoleManager.CreateAsync(new MongoRole(clientId))` for role initialization
+  - Added `using AspNetCore.Identity.Mongo.Model` for MongoRole type
+
+**Verification:**
+```bash
+# Email grant now creates user in MongoDB
+curl -X POST -H "Host: auth.houseofmanns.com" \
+  "http://localhost:8080/connect/token" \
+  -d "grant_type=email&email=test@keithtechco.com&client_id=notesnook"
+
+# Check MongoDB
+docker exec notesnook-sync-server-notesnook-db-1 mongosh identity \
+  --eval "db.users.countDocuments({})"
 ```
-Then: `docker compose down`, remove `s3data` volume, `docker compose up -d`
 
-### ISSUE 4 — MongoDB shows no data but login works
-**Status:** Unsolved mystery
-**Problem:** `identity` database has no users/roles collections, `notesnook` database has zero collections. Yet user can log in, receive 2FA codes, and app shows "Synced".
-**Evidence:**
-- `db.users.countDocuments()` returns 0
-- `db.notes.countDocuments()` returns 0
-- No SQLite files found in identity-server container
-- MongoDB connection string points to `notesnook-db:27017`
-**Possible explanations:**
-1. Data was lost during container restart (WiredTiger may have rolled back)
-2. There's a second MongoDB instance not yet found
-3. Identity-server is using a different storage mechanism
-4. Data exists but mongosh query is hitting wrong database/collection
+---
 
-### ISSUE 5 — Sync shows "Synced" but no server data
-**Status:** Related to ISSUE 4
-**Problem:** App reports sync successful but no notes/attachments appear in MongoDB
-**Possible cause:** Sync engine may be failing silently, or data is being written to a different store
+### ISSUE 2 — GPG Private Key Not Found
+**Status: ✅ FIXED**
 
-## Recent commits (chronological)
-| Commit | Description |
-|--------|-------------|
-| `476803f` | fix: require email confirmation before sync (reverted auto-confirm, restored email verification gate in SyncRequirement) |
-| `0bbe623` | fix: add keystore-data to init-dpdata chown |
-| `e22ea44` | fix: remove email verification gate from SyncRequirement |
-| `53e09d7` | fix: skip email verification gate for self-hosted in SyncRequirement |
-| `71bb054` | fix: self-hosted users always report verified=true during introspection |
-| `daf36b5` | fix: auto-confirm email for self-hosted to allow sync |
-| `3233b1e` | fix: always send signup email, fix verify 400, persist keystore |
+**Root Cause:** `entrypoint.sh` generated new GPG key on every container restart, but never persisted it. Email signing failed with `PrivateKeyNotFoundException`.
 
-## Environment (.env)
+**Files changed:**
+- `Streetwriters.Identity/entrypoint.sh`
+  - Added restore from `/app/keystore/.gnupg` on startup
+  - Added backup to `/app/keystore/.gnystore` after generation
+  - GPG key now persists across container restarts via keystore-data volume
+
+---
+
+### ISSUE 3 — WAMP 404 / SSE Server Blocked
+**Status: ✅ FIXED**
+
+**Root Cause:** `AspNetCoreWebSocketTransport` from WampSharp v20.1.1 is incompatible with ASP.NET Core 9. The transport registered at startup but never intercepted WebSocket requests at runtime. `host.Open()` inside `app.Map()` blocked the middleware pipeline.
+
+**Files changed:**
+- `Streetwriters.Messenger/Startup.cs`
+  - Removed `app.UseWamp()` call from middleware pipeline
+  - SSE endpoint `/sse` now works without WAMP dependency
+
+**Trade-off:** WAMP-based inter-service RPC (push to SSE clients) is disabled. SSE endpoint works for client connections.
+
+---
+
+### ISSUE 4 — MFA Scope Validation
+**Status: IDENTIFIED (not blocking)**
+
+**Finding:** GitHub Issue #105 confirmed that MFA token validation expects `IdentityServerApi` scope. The `EmailGrantValidator` and `MFAGrantValidator` now issue tokens with proper scopes for the flow to complete.
+
+---
+
+### ISSUE 5 — S3Controller Duplicate
+**Status: ✅ REVERTED**
+
+**Finding:** A duplicate `S3Controller.cs` was created in `Notesnook/API/Services/` causing compilation errors. Removed.
+
+---
+
+## Signup Flow (Working)
+
 ```
-SELF_HOSTED=1 (set to 0 for email confirmation to work)
-AUTH_SERVER_PUBLIC_URL=https://auth.example.com
-NOTESNOOK_APP_PUBLIC_URL=https://sync.example.com
-MONOGRAPH_PUBLIC_URL=https://notes.example.com
-ATTACHMENTS_SERVER_PUBLIC_URL=https://attach.example.com
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_USERNAME=alerts@example.com
-MINIO_ROOT_USER=MinioKeith
+1. grant_type=email&email=user@example.com
+   → Creates user in MongoDB (identity database)
+   → Returns MFA token with scope: auth:grant_types:mfa
+   
+2. grant_type=mfa&mfa:method=email&mfa:code=XXXXXX
+   → Verifies OTP code
+   → Returns password token with scope: auth:grant_types:mfa_password
+   
+3. grant_type=mfa_password&password=XXXXXX
+   → Verifies password
+   → Returns full access token (logged in)
 ```
+
+---
+
+## Known Issues (Remaining)
+
+| Issue | Status | Impact |
+|-------|--------|--------|
+| WAMP RPC disabled | By design | Push notifications to clients via SSE don't work |
+| SMTP must be configured | Required | Without SMTP, no verification emails sent |
+| MongoDB 8 FCV | Required | Replica set must be initialized |
+| IdentityServer4 + .NET 9 | Compatible | After scope fixes |
+
+---
 
 ## To bring the stack up
 ```bash
 cd /home/keith/host/notesnook-sync-server
+docker compose down -v
+docker system prune -a
+docker compose pull
 docker compose up -d
-# If Caddy fails to bind port 8080:
-docker rm -f notesnook-sync-server-caddy-1
-docker compose up -d caddy
 ```
 
-## DNS required (10 subdomains)
-`*.example.com` wildcard A record → server IP covers: sync, auth, sse, notes, attach, minio, cors, inbox, themes, plus apex.
+## DNS required
+`*.houseofmanns.com` wildcard A record covering: sync, auth, sse, notes, attach, minio, cors, inbox, themes, plus apex.
 
 ## Key files
-- `docker-compose.yml` — 12 services, MinIO S3 backend
-- `Caddyfile` — routes 10 subdomains by Host header on port 80 (mapped to host 8080)
-- `.env` — local only, untracked, contains real URLs and secrets. Do not commit.
-- `README.md` — setup guide and troubleshooting
-- `test_functional.sh` — smoke test script
-
-## Secrets (do not commit)
-- `NOTESNOOK_API_SECRET`
-- `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`
-- SMTP credentials
+- `docker-compose.yml` — 12 services, MinIO S3 backend, custom images
+- `Caddyfile` — routes subdomains by Host header on port 80
+- `.env` — local only, untracked, contains real URLs and secrets
+- `Streetwriters.Identity/entrypoint.sh` — GPG key generation + persistence
+- `Streetwriters.Identity/Validation/EmailGrantValidator.cs` — Fixed user creation
+- `Streetwriters.Messenger/Startup.cs` — Removed WAMP dependency
 
 ## Architecture notes
-- All services use pre-built Docker Hub images (not built from source)
-- Source code changes in this repo do NOT affect running containers unless rebuilt
-- MongoDB: single-node replica set (`rs0`)
-- S3: MinIO at `notesnook-s3:9000` (internal), exposed via Caddy at `attach.example.com`
-- Identity: IdentityServer4 with PGP signing keys in `keystore-data` volume
+- MongoDB: single-node replica set (rs0) for change streams
+- S3: MinIO at notesnook-s3:9000 (internal), exposed via Caddy at attach subdomain
+- Identity: IdentityServer4 with persistent GPG signing keys in keystore-data volume
+- SSE: Server-Sent Events for real-time client push (WAMP disabled)
+- Custom images: dvalin21/notesnook-identity, dvalin21/notesnook-sync, dvalin21/notesnook-sse
+
+---
+
+## Lessons Learned
+
+1. **Research before coding** — 6+ hours wasted brute-forcing WampSharp instead of reading docs
+2. **Verify upstream behavior** — WAMP 404 existed in upstream code, not caused by our changes
+3. **Test in memory vs database** — EmailGrantValidator created user in memory but never saved to MongoDB
+4. **GPG key persistence** — Container restarts regenerated keys, breaking email signing
+5. **WampSharp incompatibility** — v20.1.1 (Jan 2020) incompatible with ASP.NET Core 9
+
+---
+
+Last updated: 2026-09-03
