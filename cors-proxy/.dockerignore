@@ -1,0 +1,27 @@
+# Build output (regenerated during image build)
+dist/
+*.js
+*.js.map
+
+# Dependencies (bun install will recreate)
+node_modules/
+
+# Environment files — never bake secrets into image
+.env
+.env.*
+!.env.example
+
+# Git metadata
+.git/
+.gitignore
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log

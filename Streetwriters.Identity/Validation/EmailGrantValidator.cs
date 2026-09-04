@@ -30,6 +30,7 @@ using IdentityServer4.Models;
 using IdentityServer4.Stores;
 using IdentityServer4.Validation;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Logging;
 using Streetwriters.Common.Enums;
 using Streetwriters.Common.Models;
 using Streetwriters.Identity.Interfaces;
@@ -48,8 +49,10 @@ namespace Streetwriters.Identity.Validation
         private JwtRequestValidator JWTRequestValidator { get; set; }
         private IResourceStore ResourceStore { get; set; }
         private IUserClaimsPrincipalFactory<User> PrincipalFactory { get; set; }
+        private ILogger<EmailGrantValidator> _logger;
+
         public EmailGrantValidator(UserManager<User> userManager, RoleManager<MongoRole> roleManager, SignInManager<User> signInManager, IMFAService mfaService, ITokenGenerationService tokenGenerationService,
-        IResourceStore resourceStore, IUserClaimsPrincipalFactory<User> principalFactory)
+        IResourceStore resourceStore, IUserClaimsPrincipalFactory<User> principalFactory, ILogger<EmailGrantValidator> logger)
         {
             UserManager = userManager;
             RoleManager = roleManager;
@@ -58,6 +61,7 @@ namespace Streetwriters.Identity.Validation
             TokenGenerationService = tokenGenerationService;
             ResourceStore = resourceStore;
             PrincipalFactory = principalFactory;
+            _logger = logger;
         }
 
         public string GrantType => Config.EMAIL_GRANT_TYPE;
@@ -68,6 +72,7 @@ namespace Streetwriters.Identity.Validation
             var email = context.Request.Raw["email"];
             var clientId = context.Request.ClientId;
             var existingUser = await UserManager.FindRegisteredUserAsync(email, clientId);
+            _logger.LogDebug("[EmailGrantValidator] FindRegisteredUserAsync email={Email} clientId={ClientId} existingUser={Exists}", email, clientId, existingUser != null ? "FOUND" : "NOT_FOUND");
             var user = existingUser ?? new User
             {
                 Id = MongoDB.Bson.ObjectId.GenerateNewId(),
@@ -91,6 +96,7 @@ namespace Streetwriters.Identity.Validation
                 var createResult = await UserManager.CreateAsync(user);
                 if (!createResult.Succeeded)
                 {
+                    Console.WriteLine($"[EmailGrantValidator] CreateAsync FAILED - returning invalid_grant. Errors: {string.Join(", ", createResult.Errors.Select(e => e.Description))}");
                     context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant);
                     return;
                 }
@@ -107,7 +113,7 @@ namespace Streetwriters.Identity.Validation
             {
                 ["additional_data"] = new MFARequiredResponse
                 {
-                    PhoneNumber = sendPhoneNumber && user.PhoneNumber != null ? Regex.Replace(user.PhoneNumber, @"\d(?!\d{0,3}$)", "*") : null,
+                    PhoneNumber = sendPhoneNumber && user.PhoneNumber != null ? Regex.Replace(user.PhoneNumber, @"\d(?!\\d{0,3}$)", "*") : null,
                     PrimaryMethod = primaryMethod,
                     SecondaryMethod = secondaryMethod,
                 }
