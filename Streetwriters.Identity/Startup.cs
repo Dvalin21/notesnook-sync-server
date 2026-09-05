@@ -218,51 +218,46 @@ namespace Streetwriters.Identity
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
+            Console.WriteLine("[TRACE] Configure: Starting pipeline setup");
+
             app.UseForwardedHeadersWithKnownProxies(env, "CF-Connecting-IP");
+            Console.WriteLine("[TRACE] Configure: Forwarded headers configured");
 
             app.UseCors("notesnook");
+            Console.WriteLine("[TRACE] Configure: CORS configured");
+
             app.UseVersion(Servers.IdentityServer);
+            Console.WriteLine("[TRACE] Configure: Version endpoint configured");
+
+            // WAMP MUST be before UseRouting so Map branch can intercept before endpoint routing
+            // ponytail: WAMP disabled — incompatible with .NET 9, hangs middleware pipeline
+            // Console.WriteLine("[TRACE] Configure: About to call UseWamp...");
+            // ponytail: WAMP disabled — incompatible with .NET 9, breaks middleware pipeline
+            // Full WAMP block removed
 
             app.UseRouting();
-
-            app.UseWamp(WampServers.IdentityServer, (realm, server) =>
-            {
-                realm.Services.RegisterCallee(() => app.ApplicationServices.CreateScope().ServiceProvider.GetRequiredService<IUserAccountService>());
-
-                realm.Subscribe(SubscriptionServerTopics.CreateSubscriptionTopic, async (Subscription subscription) =>
-                {
-                    using (var serviceScope = app.ApplicationServices.CreateScope())
-                    {
-                        var services = serviceScope.ServiceProvider;
-                        var userManager = services.GetRequiredService<UserManager<User>>();
-                        await MessageHandlers.CreateSubscription.Process(subscription, userManager);
-                    }
-                });
-
-                realm.Subscribe(SubscriptionServerTopics.DeleteSubscriptionTopic, async (DeleteSubscriptionMessage message) =>
-                {
-                    using (var serviceScope = app.ApplicationServices.CreateScope())
-                    {
-                        var services = serviceScope.ServiceProvider;
-                        var userManager = services.GetRequiredService<UserManager<User>>();
-                        await MessageHandlers.DeleteSubscription.Process(message, userManager);
-                    }
-                });
-            });
+            Console.WriteLine("[TRACE] Configure: Routing configured");
 
             app.UseIdentityServer();
+            Console.WriteLine("[TRACE] Configure: IdentityServer configured");
+
             app.UseRateLimiter();
+            Console.WriteLine("[TRACE] Configure: Rate limiter configured");
 
             app.UseAuthentication();
+            Console.WriteLine("[TRACE] Configure: Authentication configured");
+
             app.UseAuthorization();
+            Console.WriteLine("[TRACE] Configure: Authorization configured");
 
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers();
                 endpoints.MapHealthChecks("/health");
+                Console.WriteLine("[TRACE] Configure: Endpoints mapped");
             });
 
-            Console.WriteLine("[Startup] Pipeline configured successfully");
+            Console.WriteLine("[TRACE] Configure: Pipeline setup COMPLETE");
         }
 
         private static void AddOperationalStore(IServiceCollection services, TokenCleanupOptions? tokenCleanUpOptions = null)

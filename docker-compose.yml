@@ -153,6 +153,9 @@ services:
       <<: *server-discovery
       MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replicaSet=rs0&tls=false
       MONGODB_DATABASE_NAME: identity
+      ASPNETCORE_ENVIRONMENT: Production
+      MongoDbSettings__ConnectionString: mongodb://notesnook-db:27017/identity?replicaSet=rs0&tls=false
+      MongoDbSettings__DatabaseName: identity
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "8264"]
       interval: 40s
