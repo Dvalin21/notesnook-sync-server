@@ -194,9 +194,9 @@ services:
       MONGODB_DATABASE_NAME: notesnook
       S3_INTERNAL_SERVICE_URL: "http://notesnook-s3:9000"
       S3_INTERNAL_BUCKET_NAME: "attachments"
-      S3_ACCESS_KEY_ID: "$${MINIO_ROOT_USER:-minioadmin}"
-      S3_ACCESS_KEY: "$${MINIO_ROOT_PASSWORD:-minioadmin}"
-      S3_SERVICE_URL: "$${ATTACHMENTS_SERVER_PUBLIC_URL}"
+      S3_ACCESS_KEY_ID: "${MINIO_ROOT_USER:-minioadmin}"
+      S3_ACCESS_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+      S3_SERVICE_URL: "${ATTACHMENTS_SERVER_PUBLIC_URL}"
       S3_REGION: "us-east-1"
       S3_BUCKET_NAME: "attachments"
       ASPNETCORE_HTTP_PORTS: "5264"
