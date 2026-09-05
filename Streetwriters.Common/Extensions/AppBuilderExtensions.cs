@@ -57,19 +57,51 @@ namespace Streetwriters.Common.Extensions
 
         public static IApplicationBuilder UseWamp(this IApplicationBuilder app, WampServer server, Action<IWampHostedRealm, WampServer> action)
         {
+            Console.WriteLine($"[WAMP] Starting WAMP host for {server.Endpoint} on {server.Address}");
             WampHost host = new();
+            Console.WriteLine($"[WAMP] WAMP host created for {server.Endpoint}");
 
-            app.Map(server.Endpoint, builder =>
+            Console.WriteLine($"[WAMP] Mapping endpoint {server.Endpoint}");
+
+            // UseWebSockets at outer level so IsWebSocketRequest works in transport middleware
+            app.UseWebSockets();
+
+            // Register WAMP transport at top-level pipeline so it can accept WebSocket connections
+            host.RegisterTransport(new AspNetCoreWebSocketTransport(app),
+                                   new JTokenJsonBinding(),
+                                   new JTokenMsgpackBinding());
+            Console.WriteLine($"[WAMP] Transport registered for {server.Endpoint}");
+
+            try
             {
-                builder.UseWebSockets();
-                host.RegisterTransport(new AspNetCoreWebSocketTransport(builder),
-                                       new JTokenJsonBinding(),
-                                       new JTokenMsgpackBinding());
-            });
+                host.Open();
+                Console.WriteLine($"[WAMP] WAMP host OPENED for {server.Endpoint}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WAMP] FAILED to open host for {server.Endpoint}: {ex.GetType().Name}: {ex.Message}");
+                throw;
+            }
 
-            host.Open();
-
-            action.Invoke(host.RealmContainer.GetRealmByName(server.Realm), server);
+            try
+            {
+                var realm = host.RealmContainer.GetRealmByName(server.Realm);
+                if (realm == null)
+                {
+                    Console.WriteLine($"[WAMP] REALM NULL: {server.Realm} not found for {server.Endpoint}");
+                }
+                else
+                {
+                    Console.WriteLine($"[WAMP] Realm '{server.Realm}' obtained for {server.Endpoint}");
+                    action.Invoke(realm, server);
+                    Console.WriteLine($"[WAMP] Action invoked for {server.Endpoint}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WAMP] FAILED to get realm/invoke for {server.Endpoint}: {ex.GetType().Name}: {ex.Message}");
+                throw;
+            }
 
             return app;
         }

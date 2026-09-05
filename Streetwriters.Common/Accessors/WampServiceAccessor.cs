@@ -17,32 +17,73 @@ You should have received a copy of the Affero GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Hosting;
 using Streetwriters.Common.Interfaces;
 
 namespace Streetwriters.Common.Accessors
 {
-    public class WampServiceAccessor(Server server) : IHostedService
+    public class WampServiceAccessor(Server server)
     {
-        public IUserAccountService UserAccountService { get; set; }
-        public IUserSubscriptionService? UserSubscriptionService { get; set; }
+        private IUserAccountService? userAccountService;
+        private IUserSubscriptionService? userSubscriptionService;
+        private TaskCompletionSource<bool> initTcs = new();
+        private bool initialized = false;
 
-        public async Task StartAsync(CancellationToken cancellationToken)
+        public IUserAccountService UserAccountService
         {
-            await InitAsync();
-        }
-
-        private async Task InitAsync()
-        {
-            this.UserAccountService = await WampServers.IdentityServer.GetServiceAsync<IUserAccountService>(InitAsync);
-            if (!Constants.IS_SELF_HOSTED && server != Servers.SubscriptionServer)
+            get
             {
-                this.UserSubscriptionService = await WampServers.SubscriptionServer.GetServiceAsync<IUserSubscriptionService>(InitAsync);
+                if (userAccountService == null)
+                {
+                    Console.WriteLine($"[WAMP] UserAccountService accessed before init, waiting 30s (server={server.Hostname})");
+                    initTcs.Task.Wait(TimeSpan.FromSeconds(30));
+                }
+                if (userAccountService == null)
+                    Console.WriteLine($"[WAMP] UserAccountService STILL NULL after 30s wait (server={server.Hostname})");
+                else
+                    Console.WriteLine($"[WAMP] UserAccountService returned successfully (server={server.Hostname})");
+                return userAccountService ?? throw new InvalidOperationException("WAMP service not initialized");
             }
         }
 
-        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public IUserSubscriptionService? UserSubscriptionService
+        {
+            get
+            {
+                if (!initialized)
+                {
+                    initTcs.Task.Wait(TimeSpan.FromSeconds(30));
+                }
+                return userSubscriptionService;
+            }
+        }
+
+        public async Task InitAsync()
+        {
+            try
+            {
+                Console.WriteLine($"[WAMP] InitAsync: Connecting to IdentityServer WAMP at {WampServers.IdentityServer.Address}...");
+                userAccountService = await WampServers.IdentityServer.GetServiceAsync<IUserAccountService>();
+                Console.WriteLine($"[WAMP] InitAsync: Got IUserAccountService={userAccountService != null}");
+
+                if (!Constants.IS_SELF_HOSTED && server != Servers.SubscriptionServer)
+                {
+                    Console.WriteLine($"[WAMP] InitAsync: Connecting to SubscriptionServer WAMP...");
+                    userSubscriptionService = await WampServers.SubscriptionServer.GetServiceAsync<IUserSubscriptionService>();
+                    Console.WriteLine($"[WAMP] InitAsync: Got IUserSubscriptionService={userSubscriptionService != null}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WAMP] InitAsync FAILED: {ex.GetType().Name}: {ex.Message}");
+            }
+            finally
+            {
+                initialized = true;
+                initTcs.SetResult(true);
+            }
+        }
     }
 }
