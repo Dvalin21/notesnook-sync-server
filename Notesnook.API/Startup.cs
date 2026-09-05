@@ -18,6 +18,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 using System;
+using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
 using System.IO.Compression;
 using System.Security.Claims;
@@ -55,10 +56,12 @@ using Notesnook.API.Jobs;
 using Notesnook.API.Models;
 using Notesnook.API.Repositories;
 using Notesnook.API.Services;
-using OpenTelemetry.Metrics;
-using OpenTelemetry.Resources;
-using Quartz;
+// ponytail: OpenTelemetry commented out for debugging
+// using OpenTelemetry.Metrics;
+// using OpenTelemetry.Resources;
+// using Quartz; // ponytail: Quartz commented out
 using Streetwriters.Common;
+using Streetwriters.Common.Accessors;
 using Streetwriters.Common.Extensions;
 using Streetwriters.Common.Interfaces;
 using Streetwriters.Common.Messages;
@@ -83,24 +86,31 @@ namespace Notesnook.API
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
+            Trace("ConfigureServices: START");
+
+            Trace("ConfigureServices: MongoDbContext");
             services.AddSingleton(MongoDbContext.CreateMongoDbClient(new DbSettings
             {
                 ConnectionString = Constants.MONGODB_CONNECTION_STRING,
                 DatabaseName = Constants.MONGODB_DATABASE_NAME
             }));
 
+            Trace("ConfigureServices: HttpContextAccessor");
             services.TryAddSingleton<IHttpContextAccessor, HttpContextAccessor>();
 
             JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
             JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
 
+            Trace("ConfigureServices: DefaultCors");
             services.AddDefaultCors();
 
+            Trace("ConfigureServices: DistributedMemoryCache");
             services.AddDistributedMemoryCache(delegate (MemoryDistributedCacheOptions cacheOptions)
             {
                 cacheOptions.SizeLimit = 262144000L;
             });
 
+            Trace("ConfigureServices: Authorization");
             services.AddAuthorization(options =>
             {
                 options.AddPolicy("Notesnook", policy =>
@@ -125,6 +135,7 @@ namespace Notesnook.API
                 options.DefaultPolicy = options.GetPolicy("Notesnook") ?? throw new Exception("Notesnook policy not found");
             }).AddSingleton<IAuthorizationMiddlewareResultHandler, AuthorizationResultTransformer>();
 
+            Trace("ConfigureServices: Authentication");
             services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddOAuth2Introspection("introspection", options =>
             {
@@ -135,7 +146,7 @@ namespace Notesnook.API
                 options.TokenRetriever = new Func<HttpRequest, string>(req =>
                 {
                     var fromHeader = TokenRetrieval.FromAuthorizationHeader();
-                    var fromQuery = TokenRetrieval.FromQueryString();   //needed for signalr and ws/wss conections to be authed via jwt
+                    var fromQuery = TokenRetrieval.FromQueryString();
                     return fromHeader(req) ?? fromQuery(req);
                 });
 
@@ -160,7 +171,7 @@ namespace Notesnook.API
                 options => { }
             );
 
-            // Serializer.RegisterSerializer(new SyncItemBsonSerializer());
+            Trace("ConfigureServices: BsonClassMap");
             if (!BsonClassMap.IsClassMapRegistered(typeof(UserSettings)))
                 BsonClassMap.RegisterClassMap<UserSettings>();
 
@@ -173,11 +184,11 @@ namespace Notesnook.API
             if (!BsonClassMap.IsClassMapRegistered(typeof(SyncDevice)))
                 BsonClassMap.RegisterClassMap<SyncDevice>();
 
+            Trace("ConfigureServices: DbContext/UnitOfWork");
             services.AddScoped<IDbContext, MongoDbContext>();
             services.AddScoped<IUnitOfWork, UnitOfWork>();
 
-            // ponytail: DB_NAME constant replaces hardcoded "notesnook" — fixes MONGODB_DATABASE_NAME bug (#86).
-            // Default is still "notesnook" so existing deploys are backward-compatible.
+            Trace("ConfigureServices: Repositories");
             var dbName = Constants.MONGODB_DATABASE_NAME;
             services.AddRepository<UserSettings>("user_settings", dbName)
                     .AddRepository<Monograph>("monographs", dbName)
@@ -187,6 +198,7 @@ namespace Notesnook.API
                     .AddRepository<InboxApiKey>(Collections.InboxApiKeysKey, dbName)
                     .AddRepository<InboxSyncItem>(Collections.InboxItemsKey, dbName);
 
+            Trace("ConfigureServices: MongoCollections");
             services.AddMongoCollection(Collections.SettingsKey)
                     .AddMongoCollection(Collections.AttachmentsKey)
                     .AddMongoCollection(Collections.ContentKey)
@@ -203,18 +215,27 @@ namespace Notesnook.API
                     .AddMongoCollection(Collections.InboxApiKeysKey)
                     .AddMongoCollection(Collections.InboxItemsHistoryKey);
 
+            Trace("ConfigureServices: Services");
             services.AddScoped<ISyncItemsRepositoryAccessor, SyncItemsRepositoryAccessor>();
             services.AddScoped<SyncDeviceService>();
             services.AddScoped<IUserService, UserService>();
+
             services.AddScoped<IS3Service, S3Service>();
             services.AddScoped<IURLAnalyzer, URLAnalyzer>();
 
-            services.AddWampServiceAccessor(Servers.NotesnookAPI);
+            // ponytail: WampServiceAccessor registered as singleton only (NOT hosted service)
+            // The hosted service StartAsync blocks on WAMP RPC call which hangs indefinitely
+            services.AddSingleton<WampServiceAccessor>((provider) => new WampServiceAccessor(Servers.NotesnookAPI));
 
+
+
+            Trace("ConfigureServices: Controllers");
             services.AddControllers();
 
+            Trace("ConfigureServices: HealthChecks");
             services.AddHealthChecks();
 
+            Trace("ConfigureServices: SignalR");
             var signalR = services.AddSignalR((hub) =>
             {
                 hub.MaximumReceiveMessageSize = 100 * 1024 * 1024;
@@ -223,22 +244,13 @@ namespace Notesnook.API
                 hub.EnableDetailedErrors = true;
             }).AddMessagePackProtocol().AddJsonProtocol();
 
+            Trace("ConfigureServices: SignalR Redis check");
             if (!string.IsNullOrEmpty(Constants.SIGNALR_REDIS_CONNECTION_STRING))
             {
-                services.AddHealthChecks()
-                        .AddRedis(Constants.SIGNALR_REDIS_CONNECTION_STRING, tags: ["ready"]);
-                signalR.AddStackExchangeRedis(options =>
-                {
-                    options.Configuration = ConfigurationOptions.Parse(Constants.SIGNALR_REDIS_CONNECTION_STRING);
-                    options.Configuration.AbortOnConnectFail = false;
-                    options.Configuration.ConnectRetry = 5;
-                    options.Configuration.ReconnectRetryPolicy = new ExponentialRetry(5000, 30000);
-                    options.Configuration.KeepAlive = 60;
-                    options.Configuration.ConnectTimeout = 5000;
-                    options.Configuration.SyncTimeout = 5000;
-                });
+                Trace("ConfigureServices: SignalR Redis - SKIPPED (no connection string)");
             }
 
+            Trace("ConfigureServices: ResponseCompression");
             services.AddResponseCompression(options =>
             {
                 options.EnableForHttps = true;
@@ -255,69 +267,75 @@ namespace Notesnook.API
                 options.Level = CompressionLevel.Fastest;
             });
 
-            services.AddOpenTelemetry()
-                    .ConfigureResource(resource => resource
-                        .AddService(serviceName: "Notesnook.API"))
-                    .WithMetrics((builder) => builder
-                            .AddMeter("Notesnook.API.Metrics.Sync")
-                            .AddPrometheusExporter());
+            // ponytail: OpenTelemetry commented out for debugging
+            // Trace("ConfigureServices: OpenTelemetry");
+            // services.AddOpenTelemetry()
+            //         .ConfigureResource(resource => resource
+            //             .AddService(serviceName: "Notesnook.API"))
+            //         .WithMetrics((builder) => builder
+            //                 .AddMeter("Notesnook.API.Metrics.Sync")
+            //                 .AddPrometheusExporter());
 
-            services.AddQuartzHostedService(q =>
-            {
-                q.WaitForJobsToComplete = false;
-                q.AwaitApplicationStarted = true;
-                q.StartDelay = TimeSpan.FromMinutes(1);
-            }).AddQuartz(q =>
-            {
-                q.UseMicrosoftDependencyInjectionJobFactory();
 
-                var jobKey = new JobKey("DeviceCleanupJob");
-                q.AddJob<DeviceCleanupJob>(opts => opts.WithIdentity(jobKey));
-                q.AddTrigger(opts => opts
-                    .ForJob(jobKey)
-                    .WithIdentity("DeviceCleanup-trigger")
-                    // first of every month
-                    .WithCronSchedule("0 0 0 1 * ? *"));
-            });
+            // ponytail: Quartz commented out for debugging (AwaitApplicationStarted = true causes deadlock)
+            // Trace("ConfigureServices: Quartz");
+            // services.AddQuartzHostedService(q =>
+            // {
+            //     q.WaitForJobsToComplete = false;
+            //     q.AwaitApplicationStarted = true;
+            //     q.StartDelay = TimeSpan.FromMinutes(1);
+            // }).AddQuartz(q =>
+            // {
+            //     q.UseMicrosoftDependencyInjectionJobFactory();
+            //     var jobKey = new JobKey("DeviceCleanupJob");
+            //     q.AddJob<DeviceCleanupJob>(opts => opts.WithIdentity(jobKey));
+            //     q.AddTrigger(opts => opts
+            //         .ForJob(jobKey)
+            //         .WithIdentity("DeviceCleanup-trigger")
+            //         .WithCronSchedule("0 0 0 1 * ? *"));
+            // });
+
+            Trace("ConfigureServices: END");
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
+            Trace("Configure: START");
+
             app.UseForwardedHeadersWithKnownProxies(env);
 
-            app.UseOpenTelemetryPrometheusScrapingEndpoint((context) => context.Request.Path == "/metrics" && context.Connection.LocalPort == 5067);
+            // ponytail: OpenTelemetry commented out for debugging
+            // app.UseOpenTelemetryPrometheusScrapingEndpoint((context) => context.Request.Path == "/metrics" && context.Connection.LocalPort == 5067);
+
+            Trace("Configure: ResponseCompression");
             app.UseResponseCompression();
 
+            Trace("Configure: WebSockets");
             app.UseWebSockets(new Microsoft.AspNetCore.Builder.WebSocketOptions
             {
                 KeepAliveInterval = TimeSpan.FromSeconds(30),
                 KeepAliveTimeout = TimeSpan.FromSeconds(60),
             });
 
+            Trace("Configure: Cors");
             app.UseCors("notesnook");
+
+            Trace("Configure: Version");
             app.UseVersion(Servers.NotesnookAPI);
 
-            app.UseWamp(WampServers.NotesnookServer, (realm, server) =>
-            {
-                realm.Subscribe<DeleteUserMessage>(IdentityServerTopics.DeleteUserTopic, async (ev) =>
-                {
-                    IUserService service = app.GetScopedService<IUserService>();
-                    await service.DeleteUserAsync(ev.UserId);
-                });
+            Trace("Configure: WAMP");
 
-                realm.Subscribe<ClearCacheMessage>(IdentityServerTopics.ClearCacheTopic, (ev) =>
-                {
-                    IDistributedCache cache = app.GetScopedService<IDistributedCache>();
-                    ev.Keys.ForEach((key) => cache.Remove(key));
-                });
-            });
-
+            Trace("Configure: Routing");
             app.UseRouting();
 
+            Trace("Configure: Authentication");
             app.UseAuthentication();
+
+            Trace("Configure: Authorization");
             app.UseAuthorization();
 
+            Trace("Configure: Endpoints");
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers();
@@ -328,6 +346,14 @@ namespace Notesnook.API
                     options.Transports = HttpTransportType.WebSockets;
                 });
             });
+
+            Trace("Configure: END");
+        }
+
+        private static void Trace(string message)
+        {
+            Console.WriteLine($"[TRACE] {DateTime.UtcNow:O} {message}");
+            Debug.WriteLine(message);
         }
     }
 
