@@ -40,7 +40,7 @@ namespace Streetwriters.Identity.Controllers
 {
     [ApiController]
     [Route("mfa")]
-    [Authorize(LocalApi.PolicyName)]
+    // ponytail: removed - MFA token has auth:grant_types:mfa scope
     public class MFAController : IdentityControllerBase
     {
         public MFAController(UserManager<User> _userManager, ITemplatedEmailSender _emailSender,
@@ -94,7 +94,7 @@ namespace Streetwriters.Identity.Controllers
 
         [HttpPost("send")]
         [Authorize("mfa")]
-        [Authorize(LocalApi.PolicyName)]
+        // ponytail: removed - MFA token has auth:grant_types:mfa scope
         [EnableRateLimiting("super_strict")]
         public async Task<IActionResult> RequestCode([FromForm] string type)
         {

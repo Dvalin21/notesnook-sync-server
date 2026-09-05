@@ -28,8 +28,9 @@ namespace Streetwriters.Common.Extensions
     {
         public static IServiceCollection AddWampServiceAccessor(this IServiceCollection services, Server server)
         {
-            services.AddSingleton<WampServiceAccessor>((provider) => new WampServiceAccessor(server));
-            services.AddHostedService(provider => provider.GetRequiredService<WampServiceAccessor>());
+            var accessor = new WampServiceAccessor(server);
+            services.AddSingleton<WampServiceAccessor>((_) => accessor);
+            services.AddHostedService(provider => new WampInitializer(provider.GetRequiredService<WampServiceAccessor>()));
             return services;
         }
 
