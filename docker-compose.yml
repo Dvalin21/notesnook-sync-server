@@ -30,24 +30,15 @@ services:
           "MONOGRAPH_PUBLIC_URL"
           "ATTACHMENTS_SERVER_PUBLIC_URL"
         )
-
         for var in "$${required_vars[@]}"; do
           if [ -z "$${!var}" ]; then
             echo "Error: Required environment variable $$var is not set."
             exit 1
           fi
         done
-
         echo "All required environment variables are set."
-
-        if [ -z "$$SMTP_HOST" ] || [ -z "$$SMTP_PORT" ] || [ -z "$$SMTP_USERNAME" ] || [ -z "$$SMTP_PASSWORD" ]; then
-          printf '\n  ================================================================================\n  WARNING: SMTP IS NOT CONFIGURED\n  ================================================================================\n  Email 2FA codes and password-reset emails will NOT be sent.\n\n  Newly created users MUST switch 2FA to an Authenticator app:\n    Settings > Auth > Change 2FA method\n\n  Configure SMTP_* in .env if you need email-based 2FA or password reset.\n  ================================================================================\n\n'
-        fi
     restart: "no"
 
-  # One-shot: chown DataProtection volumes to dotnetuser (uid 1000)
-  # before the .NET services start. Docker named volumes always start
-  # owned by root, but streetwriters images run as uid 1000.
   init-dpdata:
     image: alpine:latest
     restart: "no"
@@ -68,22 +59,20 @@ services:
         echo "Done."
 
   notesnook-db:
-    image: mongo:8.0.29
+    image: dvalin21/notesnook-db:7.0.12
     hostname: notesnook-db
     volumes:
       - dbdata:/data/db
+      - ./init-rs0.sh:/docker-entrypoint-initdb.d/init-rs0.sh:ro
     networks:
       - notesnook
-    command: --replSet rs0 --bind_ip_all
-    environment:
-      # ponytail: community workaround for SERVER-121912 (kernel 6.19+ vs vendored TCMalloc).
-      # Remove once MongoDB ships a fixed 8.x or host kernel >= 7.0.14.
-      GLIBC_TUNABLES: "glibc.pthread.rseq=1"
+    command: --replSet rs0 --bind_ip 0.0.0.0
     depends_on:
       validate:
         condition: service_completed_successfully
     healthcheck:
-      test: echo 'try { rs.status() } catch (err) { rs.initiate() }; db.runCommand("ping").ok' | mongosh mongodb://localhost:27017 --quiet
+      test: >
+        mongosh --quiet --eval 'var s=rs.status(); if(!s.ok) { rs.initiate(); } var a=0; while(a++<60) { var im=db.runCommand({isMaster:1}); if(im.ismaster) quit(0); sleep(1000); } quit(1);'
       interval: 40s
       timeout: 30s
       retries: 3
@@ -98,7 +87,7 @@ services:
           memory: 1G
 
   notesnook-s3:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: dvalin21/minio-notesnook:latest
     volumes:
       - s3data:/data/s3
     environment:
@@ -111,7 +100,7 @@ services:
     env_file: *env-files
     command: server /data/s3 --console-address :9090
     healthcheck:
-      test: timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1
+      test: ["CMD", "wget", "--tries=1", "-nv", "-q", "http://127.0.0.1:9000/minio/health/live", "-O", "-"]
       interval: 40s
       timeout: 30s
       retries: 3
@@ -125,20 +114,16 @@ services:
           cpus: "0.5"
           memory: 256M
 
-  # There's no way to specify a default bucket in Minio so we have to
-  # set it up ourselves.
   setup-s3:
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     restart: "no"
     depends_on:
-      - notesnook-s3
+      notesnook-s3:
+        condition: service_healthy
     networks:
       - notesnook
-    entrypoint: /bin/bash
+    entrypoint: /bin/sh
     env_file: *env-files
-    environment:
-      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-}"
-      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-}"
     command:
       - -c
       - |
@@ -147,8 +132,8 @@ services:
           exit 1
         fi
         until mc alias set minio http://notesnook-s3:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
-          sleep 1;
-        done;
+          sleep 1
+        done
         mc mb minio/attachments -p || true
 
   identity-server:
@@ -163,10 +148,10 @@ services:
       init-dpdata:
         condition: service_completed_successfully
       notesnook-db:
-        condition: service_started
+        condition: service_healthy
     environment:
       <<: *server-discovery
-      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replSet=rs0
+      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replicaSet=rs0&tls=false
       MONGODB_DATABASE_NAME: identity
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "8264"]
@@ -184,16 +169,19 @@ services:
           memory: 128M
 
   notesnook-server:
-    image: streetwriters/notesnook-sync:v1.0-beta.32
+    image: dvalin21/notesnook-sync:latest
     volumes:
       - dpdata-notesnook:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
     depends_on:
-      - notesnook-s3
-      - setup-s3
-      - identity-server
+      notesnook-s3:
+        condition: service_healthy
+      setup-s3:
+        condition: service_completed_successfully
+      identity-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "5264"]
       interval: 40s
@@ -202,15 +190,16 @@ services:
       start_period: 60s
     environment:
       <<: *server-discovery
-      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/?replSet=rs0
+      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/?replicaSet=rs0&tls=false
       MONGODB_DATABASE_NAME: notesnook
       S3_INTERNAL_SERVICE_URL: "http://notesnook-s3:9000"
       S3_INTERNAL_BUCKET_NAME: "attachments"
-      S3_ACCESS_KEY_ID: "${MINIO_ROOT_USER:-minioadmin}"
-      S3_ACCESS_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
-      S3_SERVICE_URL: "${ATTACHMENTS_SERVER_PUBLIC_URL}"
+      S3_ACCESS_KEY_ID: "$${MINIO_ROOT_USER:-minioadmin}"
+      S3_ACCESS_KEY: "$${MINIO_ROOT_PASSWORD:-minioadmin}"
+      S3_SERVICE_URL: "$${ATTACHMENTS_SERVER_PUBLIC_URL}"
       S3_REGION: "us-east-1"
       S3_BUCKET_NAME: "attachments"
+      ASPNETCORE_HTTP_PORTS: "5264"
     deploy:
       resources:
         limits:
@@ -221,15 +210,17 @@ services:
           memory: 256M
 
   sse-server:
-    image: streetwriters/sse:v1.0-beta.32
+    image: dvalin21/notesnook-sse:latest
     volumes:
       - dpdata-sse:/app/.aspnet/DataProtection-Keys
     networks:
       - notesnook
     env_file: *env-files
     depends_on:
-      - identity-server
-      - notesnook-server
+      identity-server:
+        condition: service_healthy
+      notesnook-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "7264"]
       interval: 40s
@@ -238,6 +229,7 @@ services:
       start_period: 60s
     environment:
       <<: *server-discovery
+      ASPNETCORE_HTTP_PORTS: "7264"
     deploy:
       resources:
         limits:
@@ -255,7 +247,8 @@ services:
       - notesnook
     env_file: *env-files
     depends_on:
-      - notesnook-server
+      notesnook-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok?0:1)).catch(() => process.exit(1))"]
       interval: 40s
@@ -312,12 +305,18 @@ services:
     environment:
       DOMAIN: "${SERVER_DOMAIN:-localhost}"
     depends_on:
-      - notesnook-server
-      - identity-server
-      - sse-server
-      - monograph-server
-      - notesnook-s3
-      - cors-proxy
+      notesnook-server:
+        condition: service_healthy
+      identity-server:
+        condition: service_healthy
+      sse-server:
+        condition: service_healthy
+      monograph-server:
+        condition: service_healthy
+      notesnook-s3:
+        condition: service_healthy
+      cors-proxy:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -334,7 +333,7 @@ services:
       - notesnook
     depends_on:
       notesnook-server:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:5181/health').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
       interval: 40s

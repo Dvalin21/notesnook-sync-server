@@ -147,6 +147,51 @@ Three fixes applied to the CORS proxy (`cors-proxy/`):
 
 ---
 
+## ISSUE 8 — notesnook-server Hangs on Startup (MongoDB 8.x + .NET Driver)
+**Status: 🟡 INVESTIGATING**
+
+**Symptom:** notesnook-server container starts, process runs (20 threads, 6GB VM), but emits zero logs and never binds port 5264. Healthcheck fails. Container stays unhealthy indefinitely.
+
+**Root Cause (WORKING THEORY — needs verification):**
+
+The .NET MongoDB driver v3.x (used by .NET 9) has known issues connecting to MongoDB 8.x replica sets in Docker:
+
+1. **Connection string typo:** Compose uses `?replSet=rs0` but the correct parameter name is `?replicaSet=rs0`. The driver likely ignores the unrecognized parameter, leaving it unable to properly discover the replica set topology.
+
+2. **Docker replica set discovery bug:** MongoDB Community Forums #326657 and Stack Overflow #79366301 document identical behavior — .NET driver 3.x times out connecting to MongoDB 8.x in Docker replica set. Server shows as `ReplicaSetGhost`. Workaround: `directConnection=true`.
+
+3. **Single-node replica set handling:** MongoDB driver 3.0 changed SDAM compliance logic. Single-node replica sets can show as `Type: "Unknown"` with empty server lists, causing infinite server selection loops. (MongoDB Forums #304972, testcontainers-dotnet #1541)
+
+**Evidence:**
+- Beardedtek reference stack (mongo:7.0.12, same dvalin21 image in same compose shape) → works perfectly
+- Main stack (mongo:8.0.29, dvalin21 image, compose with Caddy) → hangs
+- Dvalin21 image in beardedtek compose → works (same image, different Mongo version + compose)
+- Main stack notesnook-server has established TCP connections to mongo (so network is fine) but driver topology discovery fails
+
+**Proposed fix (priority order):**
+1. Fix connection string: `?replSet=rs0` → `?replicaSet=rs0` (clear typo — parameter name is `replicaSet` per MongoDB docs)
+2. If still hanging, add `&directConnection=true` to connection string (documented workaround for .NET driver + Docker replica set issues)
+3. Improve Mongo healthcheck to use `isMaster` instead of just `rs.status().ok` (testcontainers #1541 — rs.status().ok can be true before cluster is actually ready)
+
+**Files to change:**
+- `docker-compose.yml`: Fix `MONGODB_CONNECTION_STRING` for notesnook-server and identity-server (both use `?replSet=rs0`)
+- `docker-compose.yml`: Consider improving notesnook-db healthcheck
+
+**Verification plan:**
+- `docker compose down -v` (clean slate)
+- Apply connection string fix
+- `docker compose up -d`
+- Wait for healthchecks
+- Verify notesnook-server binds 5264 and healthcheck passes
+- Test sync endpoint via Caddy
+
+**Fallbacks if fix doesn't work:**
+- Pin MongoDB to 7.0.12 (beardedtek reference version that works with .NET driver)
+- Evaluate `minio-notesnook` image from dvalin21 Docker Hub as alternative MinIO backend
+- Build dvalin21 images from current repo source with diagnostic verbosity to capture actual hang point
+
+---
+
 ## Signup Flow (Working)
 
 ```
@@ -173,6 +218,7 @@ Three fixes applied to the CORS proxy (`cors-proxy/`):
 | SMTP must be configured | Required | Without SMTP, no verification emails sent |
 | MongoDB 8 FCV | Required | Replica set must be initialized |
 | IdentityServer4 + .NET 9 | Compatible | After scope fixes |
+| notesnook-server startup hang | 🟡 INVESTIGATING | dvalin21 image hangs on main stack; works in beardedtek compose with mongo:7.0.12 |
 
 ---
 
@@ -225,6 +271,7 @@ docker compose up -d
 6. **Middleware ordering matters** — WAMP transport must be registered before IdentityServer4 consumes the request
 7. **Interface vs concrete class members** — IS3Service doesn't expose static HttpClient; must reference concrete S3Service class
 8. **Docker build context** — Without .dockerignore, secrets and build artifacts can leak into image layers
+9. **MongoDB connection string typo kills .NET driver** — `replSet` vs `replicaSet`; driver silently ignores unrecognized parameter, causing topology discovery failure on MongoDB 8.x in Docker
 
 ---
 
