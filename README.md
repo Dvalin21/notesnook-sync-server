@@ -34,14 +34,48 @@ Your external proxy terminates TLS.
 5. `init-dpdata` one-shot container fixes volume permissions automatically on first boot.
 6. MongoDB is NOT exposed on a host port.
 7. Healthchecks use `nc` for .NET services, `node` for cors-proxy, and `bun` for monograph — instead of `wget`.
-8. Core service images pinned to immutable versions (`mongo:8.0.28`, MinIO release tags, `streetwriters/*:v1.0-beta.32`, `monograph:1.3.1`); infrastructure images use stable tags (`caddy:alpine`, `alpine:latest`, `willfarrell/autoheal:latest`, `vandot/alpine-bash`).
+8. App services run custom images (`dvalin21/notesnook-sync`, `-identity`, `-sse`, all `:latest` = verified build); `monograph:1.3.1`, upstream inbox/themes; infra: `caddy:alpine`, `alpine:latest`, `willfarrell/autoheal:latest`, `vandot/alpine-bash`.
 9. `setup-s3` fails fast if `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` are missing.
 10. Caddy internal reverse proxy routes all traffic through a single port (8080).
-11. MinIO image pinned to `RELEASE.2025-09-07T16-13-09Z`, mc pinned to `RELEASE.2025-08-13T08-35-41Z`.
-12. MongoDB is `8.0.28` (upgraded from `7.0.12`).
+11. MinIO runs custom `dvalin21/minio-notesnook:latest` (console on :9090); mc pinned to `RELEASE.2025-08-13T08-35-41Z` for setup-s3.
+12. MongoDB is `7.0.12` (`dvalin21/notesnook-db:7.0.12`, single-node rs0); .NET driver 3.2.1 is Server-8.x-ready (see Verified status).
 
 ---
 
+## Verified status (2026-09-06)
+
+Live stack, images `:20260906`: all 11 services healthy. Proven end to end
+with Android clients on two devices: signup → confirmation email → email
+confirm → MFA-code login (both devices) → cross-device note sync → image
+attachments (upload, render, across relogin) → monograph publish/view.
+14/14 infrastructure checks green.
+
+### Works
+- Account lifecycle: signup, confirm link, email-MFA login, profile, tokens
+- Notes sync both directions across devices; attachment blobs in MinIO
+- Real-mailbox delivery (confirmation + 2FA via prod SMTP)
+- Rate limiting (6 MFA sends/min/user); self-host entitlements (BELIEVER)
+
+### Known gaps (code)
+- Password change disabled (`PATCH /users/password/*`); clear-sessions
+  (`ClearSessionsAsync`) not implemented — logout-everywhere fails
+- SSE live push degraded (inter-service WAMP removed from SSE; clients poll)
+- MFA bursts over the limit queue silently instead of failing fast (kept)
+- Calls to a dead WAMP endpoint retry forever (no bound) — fix parked
+
+### Not yet tested
+Account delete, email change, recovery mail/codes, authenticator-app MFA,
+multipart (>5MB) uploads, inbox end-to-end (needs MX routing), quota,
+refresh past 1h.
+
+### MongoDB
+This stack runs `dvalin21/notesnook-db:7.0.12` (single-node rs0). App images
+use MongoDB .NET driver 3.2.1, which supports Server 8.x: boot + CRUD
+verified against `mongo:8.0.29` in isolation, and a separate 8.0.29 stack
+has soaked healthy for days. Full account E2E was proven on 7.0.12 —
+re-run the checklist after any major Mongo upgrade.
+
+---
 ## Prerequisites
 
 | What | Why |
