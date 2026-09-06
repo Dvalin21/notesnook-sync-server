@@ -116,7 +116,8 @@ namespace Streetwriters.Identity.Controllers
 
                         if (await UserManager.IsInRoleAsync(user, client.Id) && client.OnEmailConfirmed != null)
                         {
-                            await client.OnEmailConfirmed(userId);
+                            try { await client.OnEmailConfirmed(userId); }
+                            catch (Exception ex) { logger.LogWarning(ex, "OnEmailConfirmed notify failed", userId); } // ponytail: SSE notify is best-effort
                         }
 
                         if (!await UserManager.GetTwoFactorEnabledAsync(user))
