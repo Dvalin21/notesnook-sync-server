@@ -1,392 +1,426 @@
-x-server-discovery: &server-discovery
-  NOTESNOOK_SERVER_PORT: 5264
-  NOTESNOOK_SERVER_HOST: notesnook-server
-  IDENTITY_SERVER_PORT: 8264
-  IDENTITY_SERVER_HOST: identity-server
-  SSE_SERVER_PORT: 7264
-  SSE_SERVER_HOST: sse-server
-  SELF_HOSTED: ${SELF_HOSTED:-1}
-  IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
-  NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
-
-x-env-files: &env-files
-  - .env
-
+networks:
+  notesnook: null
 services:
-  validate:
-    image: vandot/alpine-bash
-    entrypoint: /bin/bash
-    env_file: *env-files
-    command:
-      - -c
-      - |
-        required_vars=(
-          "SERVER_DOMAIN"
-          "INSTANCE_NAME"
-          "NOTESNOOK_API_SECRET"
-          "DISABLE_SIGNUPS"
-          "AUTH_SERVER_PUBLIC_URL"
-          "NOTESNOOK_APP_PUBLIC_URL"
-          "MONOGRAPH_PUBLIC_URL"
-          "ATTACHMENTS_SERVER_PUBLIC_URL"
-        )
-        for var in "$${required_vars[@]}"; do
-          if [ -z "$${!var}" ]; then
-            echo "Error: Required environment variable $$var is not set."
-            exit 1
-          fi
-        done
-        echo "All required environment variables are set."
-    restart: "no"
-
-  init-dpdata:
-    image: alpine:latest
-    restart: "no"
-    volumes:
-      - dpdata-identity:/data/identity
-      - dpdata-notesnook:/data/notesnook
-      - dpdata-sse:/data/sse
-      - keystore-data:/data/keystore
-    depends_on:
-      validate:
-        condition: service_completed_successfully
-    command:
-      - sh
-      - -c
-      - |
-        echo "Setting DataProtection volume permissions..."
-        chown -R 1000:1000 /data/identity /data/notesnook /data/sse /data/keystore
-        echo "Done."
-
-  notesnook-db:
-    image: dvalin21/notesnook-db:7.0.12
-    hostname: notesnook-db
-    volumes:
-      - dbdata:/data/db
-      - ./init-rs0.sh:/docker-entrypoint-initdb.d/init-rs0.sh:ro
-    networks:
-      - notesnook
-    command: --replSet rs0 --bind_ip 0.0.0.0
-    depends_on:
-      validate:
-        condition: service_completed_successfully
-    healthcheck:
-      test: >
-        mongosh --quiet --eval 'var s=rs.status(); if(!s.ok) { rs.initiate(); } var a=0; while(a++<60) { var im=db.runCommand({isMaster:1}); if(im.ismaster) quit(0); sleep(1000); } quit(1);'
-      interval: 40s
-      timeout: 30s
-      retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          cpus: "4"
-          memory: 4G
-        reservations:
-          cpus: "1"
-          memory: 1G
-
-  notesnook-s3:
-    image: dvalin21/minio-notesnook:latest
-    volumes:
-      - s3data:/data/s3
+  autoheal:
     environment:
-      MINIO_BROWSER: "on"
-    networks:
-      - notesnook
-    depends_on:
-      validate:
-        condition: service_completed_successfully
-    env_file: *env-files
-    command: server /data/s3 --console-address :9090
-    healthcheck:
-      test: ["CMD", "wget", "--tries=1", "-nv", "-q", "http://127.0.0.1:9000/minio/health/live", "-O", "-"]
-      interval: 40s
-      timeout: 30s
-      retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
-          memory: 1G
-        reservations:
-          cpus: "0.5"
-          memory: 256M
-
-  setup-s3:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
-    restart: "no"
-    depends_on:
-      notesnook-s3:
-        condition: service_healthy
-    networks:
-      - notesnook
-    entrypoint: /bin/sh
-    env_file: *env-files
-    command:
-      - -c
-      - |
-        if [ -z "$$MINIO_ROOT_USER" ] || [ -z "$$MINIO_ROOT_PASSWORD" ]; then
-          echo "ERROR: MINIO_ROOT_USER and MINIO_ROOT_PASSWORD must be set" >&2
-          exit 1
-        fi
-        until mc alias set minio http://notesnook-s3:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
-          sleep 1
-        done
-        mc mb minio/attachments -p || true
-
-  identity-server:
-    image: dvalin21/notesnook-identity:latest
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
+      AUTOHEAL_INTERVAL: 60
+      AUTOHEAL_START_PERIOD: 300
+    image: willfarrell/autoheal:latest
+    restart: always
+    tty: true
     volumes:
-      - dpdata-identity:/app/.aspnet/DataProtection-Keys
-      - keystore-data:/app/keystore
-    networks:
-      - notesnook
-    env_file: *env-files
-    depends_on:
-      init-dpdata:
-        condition: service_completed_successfully
-      notesnook-db:
-        condition: service_healthy
-    environment:
-      <<: *server-discovery
-      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replicaSet=rs0&tls=false
-      MONGODB_DATABASE_NAME: identity
-      ASPNETCORE_ENVIRONMENT: Production
-      MongoDbSettings__ConnectionString: mongodb://notesnook-db:27017/identity?replicaSet=rs0&tls=false
-      MongoDbSettings__DatabaseName: identity
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "8264"]
-      interval: 40s
-      timeout: 30s
-      retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 512M
-        reservations:
-          cpus: "0.25"
-          memory: 128M
-
-  notesnook-server:
-    image: dvalin21/notesnook-sync:latest
-    volumes:
-      - dpdata-notesnook:/app/.aspnet/DataProtection-Keys
-    networks:
-      - notesnook
-    env_file: *env-files
-    depends_on:
-      notesnook-s3:
-        condition: service_healthy
-      setup-s3:
-        condition: service_completed_successfully
-      identity-server:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "5264"]
-      interval: 40s
-      timeout: 30s
-      retries: 3
-      start_period: 60s
-    environment:
-      <<: *server-discovery
-      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/?replicaSet=rs0&tls=false
-      MONGODB_DATABASE_NAME: notesnook
-      S3_INTERNAL_SERVICE_URL: "http://notesnook-s3:9000"
-      S3_INTERNAL_BUCKET_NAME: "attachments"
-      S3_ACCESS_KEY_ID: "${MINIO_ROOT_USER:-minioadmin}"
-      S3_ACCESS_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
-      S3_SERVICE_URL: "${ATTACHMENTS_SERVER_PUBLIC_URL}"
-      S3_REGION: "us-east-1"
-      S3_BUCKET_NAME: "attachments"
-      ASPNETCORE_HTTP_PORTS: "5264"
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
-          memory: 1G
-        reservations:
-          cpus: "0.25"
-          memory: 256M
-
-  sse-server:
-    image: dvalin21/notesnook-sse:latest
-    volumes:
-      - dpdata-sse:/app/.aspnet/DataProtection-Keys
-    networks:
-      - notesnook
-    env_file: *env-files
-    depends_on:
-      identity-server:
-        condition: service_healthy
-      notesnook-server:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "7264"]
-      interval: 40s
-      timeout: 30s
-      retries: 3
-      start_period: 60s
-    environment:
-      <<: *server-discovery
-      ASPNETCORE_HTTP_PORTS: "7264"
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 256M
-        reservations:
-          cpus: "0.1"
-          memory: 64M
-
-  monograph-server:
-    image: streetwriters/monograph:1.3.1
-    volumes:
-      - dpdata-monograph:/app/.aspnet/DataProtection-Keys
-    networks:
-      - notesnook
-    env_file: *env-files
-    depends_on:
-      notesnook-server:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok?0:1)).catch(() => process.exit(1))"]
-      interval: 40s
-      timeout: 30s
-      retries: 3
-      start_period: 60s
-    environment:
-      <<: *server-discovery
-      API_HOST: http://notesnook-server:5264
-      PUBLIC_URL: ${MONOGRAPH_PUBLIC_URL}
-      HOST: "0.0.0.0"
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 512M
-        reservations:
-          cpus: "0.25"
-          memory: 128M
-
-  cors-proxy:
-    build: ./cors-proxy
-    networks:
-      - notesnook
-    env_file: *env-files
-    environment:
-      PORT: 3000
-      HOST: "0.0.0.0"
-      ALLOWED_ORIGINS: "${NOTESNOOK_CORS_ORIGINS}"
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok?0:1)).catch(() => process.exit(1))"]
-      interval: 40s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 128M
-        reservations:
-          cpus: "0.1"
-          memory: 32M
-
+    - /var/run/docker.sock:/var/run/docker.sock
   caddy:
-    image: caddy:alpine
-    ports:
-      - 8080:80
-    networks:
-      - notesnook
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-    environment:
-      DOMAIN: "${SERVER_DOMAIN:-localhost}"
     depends_on:
-      notesnook-server:
+      cors-proxy:
         condition: service_healthy
       identity-server:
-        condition: service_healthy
-      sse-server:
         condition: service_healthy
       monograph-server:
         condition: service_healthy
       notesnook-s3:
         condition: service_healthy
-      cors-proxy:
+      notesnook-server:
+        condition: service_healthy
+      sse-server:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          cpus: "0.5"
+          cpus: '0.5'
           memory: 128M
         reservations:
-          cpus: "0.1"
+          cpus: '0.1'
           memory: 32M
-
-  inbox-api:
-    image: streetwriters/notesnook-inbox:latest
-    restart: unless-stopped
+    environment:
+      DOMAIN: ${SERVER_DOMAIN:-localhost}
+    image: caddy:alpine
     networks:
-      - notesnook
+    - notesnook
+    ports:
+    - 8080:80
+    volumes:
+    - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    - caddy-data:/data
+  cors-proxy:
+    build: ./cors-proxy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+    env_file: &id001
+    - .env
+    environment:
+      ALLOWED_ORIGINS: ${NOTESNOOK_CORS_ORIGINS}
+      HOST: 0.0.0.0
+      PORT: 3000
+    healthcheck:
+      interval: 40s
+      retries: 3
+      start_period: 30s
+      test:
+      - CMD
+      - node
+      - -e
+      - fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok?0:1)).catch(()
+        => process.exit(1))
+      timeout: 10s
+    networks:
+    - notesnook
+  identity-server:
+    depends_on:
+      notesnook-db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    env_file: *id001
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      IDENTITY_SERVER_HOST: identity-server
+      IDENTITY_SERVER_PORT: 8264
+      IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
+      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replSet=rs0
+      MONGODB_DATABASE_NAME: identity
+      MongoDbSettings__ConnectionString: mongodb://notesnook-db:27017/identity?replicaSet=rs0&tls=false&directConnection=true
+      MongoDbSettings__DatabaseName: identity
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+      NOTESNOOK_SERVER_HOST: notesnook-server
+      NOTESNOOK_SERVER_PORT: 5264
+      SELF_HOSTED: ${SELF_HOSTED:-1}
+      SSE_SERVER_HOST: sse-server
+      SSE_SERVER_PORT: 7264
+    healthcheck:
+      interval: 40s
+      retries: 3
+      start_period: 60s
+      test:
+      - CMD
+      - nc
+      - -z
+      - 127.0.0.1
+      - '8264'
+      timeout: 30s
+    image: dvalin21/notesnook-identity:latest
+    networks:
+    - notesnook
+    volumes:
+    - dpdata-identity:/app/.aspnet/DataProtection-Keys
+    - keystore-data:/app/keystore
+  inbox-api:
     depends_on:
       notesnook-server:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:5181/health').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
-      interval: 40s
-      timeout: 30s
-      retries: 3
-      start_period: 60s
     environment:
-      HOST: "0.0.0.0"
+      HOST: 0.0.0.0
+      NOTESNOOK_API_SERVER_URL: http://notesnook-server:5264
       PORT: 5181
-      NOTESNOOK_API_SERVER_URL: "http://notesnook-server:5264"
-
-  themes-server:
-    image: streetwriters/themes-server:latest
-    restart: unless-stopped
-    networks:
-      - notesnook
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:9000/health').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
       interval: 40s
-      timeout: 30s
       retries: 3
       start_period: 60s
+      test:
+      - CMD
+      - bun
+      - -e
+      - fetch('http://127.0.0.1:5181/health').then(r => { if (!r.ok) process.exit(1);
+        }).catch(() => process.exit(1))
+      timeout: 30s
+    image: streetwriters/notesnook-inbox:latest
+    networks:
+    - notesnook
+    restart: unless-stopped
+  init-dpdata:
+    command:
+    - sh
+    - -c
+    - 'echo "Setting DataProtection volume permissions..."
+
+      chown -R 1000:1000 /data/identity /data/notesnook /data/sse /data/keystore
+
+      echo "Done."
+
+      '
+    depends_on:
+      validate:
+        condition: service_completed_successfully
+    image: alpine:latest
+    restart: 'no'
+    volumes:
+    - dpdata-identity:/data/identity
+    - dpdata-notesnook:/data/notesnook
+    - dpdata-sse:/data/sse
+    - keystore-data:/data/keystore
+  monograph-server:
+    depends_on:
+      notesnook-server:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    env_file: *id001
     environment:
-      HOST: "0.0.0.0"
+      API_HOST: http://notesnook-server:5264
+      HOST: 0.0.0.0
+      IDENTITY_SERVER_HOST: identity-server
+      IDENTITY_SERVER_PORT: 8264
+      IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+      NOTESNOOK_SERVER_HOST: notesnook-server
+      NOTESNOOK_SERVER_PORT: 5264
+      PUBLIC_URL: ${MONOGRAPH_PUBLIC_URL}
+      SELF_HOSTED: ${SELF_HOSTED:-1}
+      SSE_SERVER_HOST: sse-server
+      SSE_SERVER_PORT: 7264
+    healthcheck:
+      interval: 40s
+      retries: 3
+      start_period: 60s
+      test:
+      - CMD
+      - bun
+      - -e
+      - fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok?0:1)).catch(()
+        => process.exit(1))
+      timeout: 30s
+    image: streetwriters/monograph:1.3.1
+    networks:
+    - notesnook
+    volumes:
+    - dpdata-monograph:/app/.aspnet/DataProtection-Keys
+  notesnook-db:
+    command: --replSet rs0 --bind_ip_all
+    depends_on:
+      validate:
+        condition: service_completed_successfully
+    healthcheck:
+      interval: 40s
+      retries: 5
+      start_period: 60s
+      test: echo 'try { rs.status() } catch (err) { rs.initiate() }; db.runCommand("ping").ok'
+        | mongosh mongodb://localhost:27017 --quiet
+      timeout: 30s
+    hostname: notesnook-db
+    image: mongo:7.0.12
+    networks:
+    - notesnook
+    volumes:
+    - dbdata:/data/db
+  notesnook-s3:
+    command: server /data/s3 --console-address :9090
+    depends_on:
+      validate:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    env_file: *id001
+    environment:
+      MINIO_BROWSER: 'on'
+    healthcheck:
+      interval: 40s
+      retries: 3
+      start_period: 60s
+      test:
+      - CMD
+      - wget
+      - --tries=1
+      - -nv
+      - -q
+      - http://127.0.0.1:9000/minio/health/live
+      - -O
+      - '-'
+      timeout: 30s
+    image: dvalin21/minio-notesnook:latest
+    networks:
+    - notesnook
+    volumes:
+    - s3data:/data/s3
+  notesnook-server:
+    depends_on:
+      identity-server:
+        condition: service_healthy
+      notesnook-s3:
+        condition: service_healthy
+      setup-s3:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    env_file: *id001
+    environment:
+      ASPNETCORE_HTTP_PORTS: '5264'
+      IDENTITY_SERVER_HOST: identity-server
+      IDENTITY_SERVER_PORT: 8264
+      IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
+      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/?replSet=rs0
+      MONGODB_DATABASE_NAME: notesnook
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+      NOTESNOOK_SERVER_HOST: notesnook-server
+      NOTESNOOK_SERVER_PORT: 5264
+      S3_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      S3_BUCKET_NAME: attachments
+      S3_INTERNAL_BUCKET_NAME: attachments
+      S3_INTERNAL_SERVICE_URL: http://notesnook-s3:9000
+      S3_REGION: us-east-1
+      S3_SERVICE_URL: ${ATTACHMENTS_SERVER_PUBLIC_URL}
+      SELF_HOSTED: ${SELF_HOSTED:-1}
+      SSE_SERVER_HOST: sse-server
+      SSE_SERVER_PORT: 7264
+    healthcheck:
+      interval: 40s
+      retries: 3
+      start_period: 60s
+      test:
+      - CMD
+      - nc
+      - -z
+      - 127.0.0.1
+      - '5264'
+      timeout: 30s
+    image: dvalin21/notesnook-sync:latest
+    networks:
+    - notesnook
+    volumes:
+    - dpdata-notesnook:/app/.aspnet/DataProtection-Keys
+  setup-s3:
+    command:
+    - -c
+    - "if [ -z \"$$MINIO_ROOT_USER\" ] || [ -z \"$$MINIO_ROOT_PASSWORD\" ]; then\n\
+      \  echo \"ERROR: MINIO_ROOT_USER and MINIO_ROOT_PASSWORD must be set\" >&2\n\
+      \  exit 1\nfi\nuntil mc alias set minio http://notesnook-s3:9000 \"$$MINIO_ROOT_USER\"\
+      \ \"$$MINIO_ROOT_PASSWORD\"; do\n  sleep 1\ndone\nmc mb minio/attachments -p\
+      \ || true\n"
+    depends_on:
+      notesnook-s3:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    env_file: *id001
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    networks:
+    - notesnook
+    restart: 'no'
+  sse-server:
+    depends_on:
+      identity-server:
+        condition: service_healthy
+      notesnook-server:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    env_file: *id001
+    environment:
+      ASPNETCORE_HTTP_PORTS: '7264'
+      IDENTITY_SERVER_HOST: identity-server
+      IDENTITY_SERVER_PORT: 8264
+      IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+      NOTESNOOK_SERVER_HOST: notesnook-server
+      NOTESNOOK_SERVER_PORT: 5264
+      SELF_HOSTED: ${SELF_HOSTED:-1}
+      SSE_SERVER_HOST: sse-server
+      SSE_SERVER_PORT: 7264
+    healthcheck:
+      interval: 40s
+      retries: 3
+      start_period: 60s
+      test:
+      - CMD
+      - nc
+      - -z
+      - 127.0.0.1
+      - '7264'
+      timeout: 30s
+    image: dvalin21/notesnook-sse:latest
+    networks:
+    - notesnook
+    volumes:
+    - dpdata-sse:/app/.aspnet/DataProtection-Keys
+  themes-server:
+    environment:
+      HOST: 0.0.0.0
       PORT: 9000
-      THEMES_REPO_URL: "https://github.com/streetwriters/notesnook-themes.git"
+      THEMES_REPO_URL: https://github.com/streetwriters/notesnook-themes.git
+    healthcheck:
+      interval: 40s
+      retries: 3
+      start_period: 60s
+      test:
+      - CMD
+      - bun
+      - -e
+      - fetch('http://127.0.0.1:9000/health').then(r => { if (!r.ok) process.exit(1);
+        }).catch(() => process.exit(1))
+      timeout: 30s
+    image: streetwriters/themes-server:latest
+    networks:
+    - notesnook
+    restart: unless-stopped
     volumes:
-      - themesdata:/installs.json
-
-  autoheal:
-    image: willfarrell/autoheal:latest
-    restart: always
-    tty: true
-    environment:
-      AUTOHEAL_INTERVAL: 60
-      AUTOHEAL_START_PERIOD: 300
-      AUTOHEAL_DEFAULT_STOP_TIMEOUT: 10
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-
-networks:
-  notesnook:
-
+    - themesdata:/installs.json
+  validate:
+    command:
+    - -c
+    - "required_vars=(\n  \"SERVER_DOMAIN\"\n  \"INSTANCE_NAME\"\n  \"NOTESNOOK_API_SECRET\"\
+      \n  \"DISABLE_SIGNUPS\"\n  \"AUTH_SERVER_PUBLIC_URL\"\n  \"NOTESNOOK_APP_PUBLIC_URL\"\
+      \n  \"MONOGRAPH_PUBLIC_URL\"\n  \"ATTACHMENTS_SERVER_PUBLIC_URL\"\n)\nfor var\
+      \ in \"$${required_vars[@]}\"; do\n  if [ -z \"$${!var}\" ]; then\n    echo\
+      \ \"Error: Required environment variable $$var is not set.\"\n    exit 1\n \
+      \ fi\ndone\necho \"All required environment variables are set.\"\n"
+    entrypoint: /bin/bash
+    env_file: *id001
+    image: vandot/alpine-bash
+    restart: 'no'
 volumes:
-  dbdata:
-  s3data:
-  caddy-data:
-  dpdata-identity:
-  dpdata-notesnook:
-  dpdata-sse:
-  dpdata-monograph:
-  keystore-data:
-  themesdata:
+  caddy-data: null
+  dbdata: null
+  dpdata-identity: null
+  dpdata-monograph: null
+  dpdata-notesnook: null
+  dpdata-sse: null
+  keystore-data: null
+  s3data: null
+  themesdata: null
+x-env-files: *id001
+x-server-discovery:
+  IDENTITY_SERVER_HOST: identity-server
+  IDENTITY_SERVER_PORT: 8264
+  IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
+  NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+  NOTESNOOK_SERVER_HOST: notesnook-server
+  NOTESNOOK_SERVER_PORT: 5264
+  SELF_HOSTED: ${SELF_HOSTED:-1}
+  SSE_SERVER_HOST: sse-server
+  SSE_SERVER_PORT: 7264

@@ -223,11 +223,18 @@ namespace Notesnook.API
             services.AddScoped<IS3Service, S3Service>();
             services.AddScoped<IURLAnalyzer, URLAnalyzer>();
 
+            // ponytail: HTTP client for Identity Server (WAMP replacement)
+            services.AddHttpClient("IdentityServer", client =>
+            {
+                client.BaseAddress = new Uri($"http://{Constants.IDENTITY_SERVER_HOST}:{Constants.IDENTITY_SERVER_PORT}/");
+                client.DefaultRequestHeaders.Add("Accept", "application/json");
+            });
+            services.AddScoped<Streetwriters.Common.Interfaces.IUserAccountService, Services.UserAccountService>();
+
             // ponytail: WampServiceAccessor registered as singleton only (NOT hosted service)
             // The hosted service StartAsync blocks on WAMP RPC call which hangs indefinitely
             services.AddSingleton<WampServiceAccessor>((provider) => new WampServiceAccessor(Servers.NotesnookAPI));
-
-
+            services.AddScoped<IURLAnalyzer, URLAnalyzer>();
 
             Trace("ConfigureServices: Controllers");
             services.AddControllers();
