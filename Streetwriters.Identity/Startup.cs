@@ -164,7 +164,7 @@ namespace Streetwriters.Identity
                         Window = TimeSpan.FromMinutes(1),
                         SegmentsPerWindow = 2,
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                        QueueLimit = int.MaxValue,
+                        QueueLimit = 0,
                         AutoReplenishment = true
                     });
                 });

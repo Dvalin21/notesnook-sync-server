@@ -28,13 +28,15 @@ namespace Streetwriters.Common.Helpers
 {
     public class WampHelper
     {
-        public static async Task<IWampChannel> OpenWampChannelAsync(string server, string realmName)
+        // ponytail: bounded retries (3 x 5s) - the old infinite loop hung any request calling a dead WAMP endpoint forever
+        public static async Task<IWampChannel> OpenWampChannelAsync(string server, string realmName, int maxAttempts = 3)
         {
             DefaultWampChannelFactory channelFactory = new();
 
             IWampChannel channel = channelFactory.CreateJsonChannel(server, realmName);
 
             var isConnected = false;
+            var attempts = 0;
             while (!isConnected)
             {
                 try
@@ -44,6 +46,7 @@ namespace Streetwriters.Common.Helpers
                 }
                 catch
                 {
+                    if (++attempts >= maxAttempts) throw;
                     await Task.Delay(5000);
                     continue;
                 }
