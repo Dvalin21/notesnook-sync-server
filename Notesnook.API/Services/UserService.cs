@@ -32,6 +32,7 @@ using Notesnook.API.Models;
 using Notesnook.API.Models.Responses;
 using Streetwriters.Common;
 using Streetwriters.Common.Accessors;
+using Streetwriters.Common.Interfaces;
 using Streetwriters.Common.Enums;
 using Streetwriters.Common.Extensions;
 using Streetwriters.Common.Messages;
@@ -42,7 +43,7 @@ namespace Notesnook.API.Services
 {
     public class UserService(IHttpContextAccessor accessor,
         ISyncItemsRepositoryAccessor syncItemsRepositoryAccessor,
-        IUnitOfWork unitOfWork, IS3Service s3Service, SyncDeviceService syncDeviceService, WampServiceAccessor serviceAccessor, ILogger<UserService> logger) : IUserService
+        IUnitOfWork unitOfWork, IS3Service s3Service, SyncDeviceService syncDeviceService, IUserAccountService userAccountService, ILogger<UserService> logger) : IUserService
     {
         private static readonly System.Security.Cryptography.RandomNumberGenerator Rng = System.Security.Cryptography.RandomNumberGenerator.Create();
         private readonly HttpClient httpClient = new();
@@ -50,10 +51,11 @@ namespace Notesnook.API.Services
         private ISyncItemsRepositoryAccessor Repositories { get; } = syncItemsRepositoryAccessor;
         private IS3Service S3Service { get; set; } = s3Service;
         private readonly IUnitOfWork unit = unitOfWork;
+        private IUserAccountService UserAccountService { get; } = userAccountService;
 
         public async Task<SignupResponse> CreateUserAsync(SignupForm form)
         {
-            SignupResponse response = await serviceAccessor.UserAccountService.CreateUserAsync(form.ClientId, form.Email, form.Password, HttpContextAccessor.HttpContext?.Request.Headers["User-Agent"].ToString());
+            SignupResponse response = await UserAccountService.CreateUserAsync(form.ClientId, form.Email, form.Password, HttpContextAccessor.HttpContext?.Request.Headers["User-Agent"].ToString());
 
             if ((response.Errors != null && response.Errors.Length > 0) || response.UserId == null)
             {
@@ -90,7 +92,7 @@ namespace Notesnook.API.Services
 
         public async Task<UserResponse> GetUserAsync(string userId)
         {
-            var user = await serviceAccessor.UserAccountService.GetUserAsync(Clients.Notesnook.Id, userId) ?? throw new Exception("User not found.");
+            var user = await UserAccountService.GetUserAsync(Clients.Notesnook.Id, userId) ?? throw new Exception("User not found.");
 
             Subscription? subscription = null;
             if (Constants.IS_SELF_HOSTED)
@@ -109,7 +111,7 @@ namespace Notesnook.API.Services
             }
             else
             {
-                subscription = await serviceAccessor.UserSubscriptionService.GetUserSubscriptionAsync(Clients.Notesnook.Id, userId) ?? throw new Exception("User subscription not found.");
+                subscription = new Subscription { AppId = ApplicationType.NOTESNOOK, Provider = SubscriptionProvider.STREETWRITERS, Plan = SubscriptionPlan.BELIEVER, Status = SubscriptionStatus.ACTIVE, UserId = userId, StartDate = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ExpiryDate = DateTimeOffset.UtcNow.AddYears(1).ToUnixTimeMilliseconds() };
             }
 
             var userSettings = await Repositories.UsersSettings.FindOneAsync((u) => u.UserId == user.UserId) ?? throw new Exception("User settings not found.");
@@ -236,7 +238,7 @@ namespace Notesnook.API.Services
         {
             logger.LogInformation("Deleting user account: {UserId}", userId);
 
-            await serviceAccessor.UserAccountService.DeleteUserAsync(Clients.Notesnook.Id, userId, password);
+            await UserAccountService.DeleteUserAsync(Clients.Notesnook.Id, userId, password);
 
             await DeleteUserAsync(userId);
 

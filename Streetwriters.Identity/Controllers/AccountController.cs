@@ -178,7 +178,7 @@ namespace Streetwriters.Identity.Controllers
             var client = Clients.FindClientById(User.FindFirstValue("client_id"));
             if (client == null) return BadRequest("Invalid client_id.");
             var user = await UserManager.GetUserAsync(User) ?? throw new Exception("User not found.");
-            return Ok(UserAccountService.GetUserAsync(client.Id, user.Id.ToString()));
+            return Ok(await UserAccountService.GetUserAsync(client.Id, user.Id.ToString()));
         }
 
         [HttpPost("recover")]
