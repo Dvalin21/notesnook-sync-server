@@ -77,25 +77,69 @@ function isPrivateIP(hostname: string): boolean {
   return false;
 }
 
+// Normalize obfuscated numeric IP forms to dotted quads so the
+// private-range checks below cannot be bypassed ("2130706433",
+// "0x7f.0.0.1", "0177.0.0.1" all mean 127.0.0.1). Returns null when the
+// hostname is not usable.
+function normalizeHostname(hostname: string): string | null {
+  let h = hostname.toLowerCase();
+  if (h.endsWith(".")) h = h.slice(0, -1);
+  if (/^\d+$/.test(h)) {
+    let n: bigint;
+    try { n = BigInt(h); } catch { return null; }
+    if (n < 0n || n > 4294967295n) return null;
+    const b = Number(n);
+    h = [(b >>> 24) & 255, (b >>> 16) & 255, (b >>> 8) & 255, b & 255].join(".");
+    return h;
+  }
+  return h;
+}
+
+// Resolve a hostname and reject when any address is private. String-only
+// checks lose to DNS rebinding (name clean at validation, dirty at fetch).
+async function resolvedIPsArePublic(hostname: string): Promise<boolean> {
+  const lookup = (Bun as any).dnsLookup;
+  if (typeof lookup !== "function") return true;
+  let raw: any;
+  try {
+    raw = await lookup(hostname);
+  } catch {
+    return false;
+  }
+  const list: any[] = Array.isArray(raw) ? raw : [raw];
+  if (list.length === 0) return false;
+  for (const entry of list) {
+    const ip = String(entry?.address ?? entry);
+    const norm = normalizeHostname(ip);
+    if (!norm || isPrivateIP(norm)) return false;
+  }
+  return true;
+}
+
 // Validate URL and check for SSRF
-function isValidUrl(urlString: string): boolean {
+async function isValidUrl(urlString: string): Promise<boolean> {
   try {
     const url = new URL(urlString);
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
 
+    const hostname = normalizeHostname(url.hostname);
+    if (!hostname) return false;
+
     // SSRF protection: block private/internal IPs
-    if (isPrivateIP(url.hostname)) return false;
+    if (isPrivateIP(hostname)) return false;
 
     // If ALLOWED_DOMAINS is set, only allow those domains
     if (ALLOWED_DOMAINS.length > 0) {
       const isAllowed = ALLOWED_DOMAINS.some(
         (domain) =>
-          url.hostname === domain || url.hostname.endsWith("." + domain),
+          hostname === domain || hostname.endsWith("." + domain),
       );
       if (!isAllowed) return false;
     }
 
-    return true;
+    // DNS rebinding: the name was clean above, make sure it resolves
+    // clean too (checked at every redirect hop by the caller).
+    return await resolvedIPsArePublic(hostname);
   } catch {
     return false;
   }
@@ -126,7 +170,7 @@ async function proxyRequest(
       if (location) {
         const redirectUrl = new URL(location, targetUrl).toString();
         // SSRF protection: validate redirect target
-        if (!isValidUrl(redirectUrl)) {
+        if (!(await isValidUrl(redirectUrl))) {
           return new Response("Redirect to blocked URL", {
             status: 403,
             headers: corsHeaders,
@@ -214,7 +258,7 @@ async function proxyRequest(
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
     console.error(`Proxy error: ${errorMessage}`);
-    return new Response(`Proxy error: ${errorMessage}`, {
+    return new Response("Bad gateway", {
       status: 502,
       headers: corsHeaders,
     });
@@ -242,6 +286,13 @@ const server = Bun.serve({
       logRequest(req.method, url.pathname, 204);
       return new Response(null, {
         status: 204,
+        headers: corsHeaders,
+      });
+    }
+
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      return new Response("Method not allowed", {
+        status: 405,
         headers: corsHeaders,
       });
     }
@@ -311,7 +362,7 @@ const server = Bun.serve({
     }
 
     // Validate URL
-    if (!isValidUrl(targetUrl)) {
+    if (!(await isValidUrl(targetUrl))) {
       logRequest(req.method, targetUrl, 400);
       return new Response("Invalid URL provided", {
         status: 400,
@@ -321,9 +372,16 @@ const server = Bun.serve({
 
     // Check if it's a YouTube URL and redirect instead of proxying
     if (isYouTubeEmbed(targetUrl)) {
+      const videoId = extractYouTubeVideoId(targetUrl);
+      if (!videoId) {
+        return new Response("Invalid YouTube URL", {
+          status: 400,
+          headers: corsHeaders,
+        });
+      }
       // YouTube URL detected, redirect to youtube-nocookie.com
       logRequest(req.method, targetUrl, 200);
-      return new Response(serveYouTubeEmbed(targetUrl), {
+      return new Response(serveYouTubeEmbed("https://www.youtube-nocookie.com/embed/" + videoId), {
         status: 200,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -393,6 +451,18 @@ function serveYouTubeEmbed(url: string) {
     )}" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture;web-share" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" title="Video player"></iframe>
 </body>
 </html>`;
+}
+
+// Video IDs are exactly 11 base64url chars - anything else is rejected
+// before it can reach the embed HTML below.
+function extractYouTubeVideoId(urlString: string): string | null {
+  try {
+    const url = new URL(urlString);
+    const m = /^\/embed\/([A-Za-z0-9_-]{11})/.exec(url.pathname);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
 }
 
 // Check if URL is a YouTube embed (including youtube-nocookie.com)
