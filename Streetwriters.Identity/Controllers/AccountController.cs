@@ -27,6 +27,7 @@ using System.Threading.Tasks;
 using AspNetCore.Identity.Mongo.Model;
 using IdentityServer4.Extensions;
 using IdentityServer4.Stores;
+using IdentityServer4.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -180,6 +181,25 @@ namespace Streetwriters.Identity.Controllers
             if (client == null) return BadRequest("Invalid client_id.");
             var user = await UserManager.GetUserAsync(User) ?? throw new Exception("User not found.");
             return Ok(await UserAccountService.GetUserAsync(client.Id, user.Id.ToString()));
+        }
+
+        [HttpDelete]
+        // ponytail: the missing half of account deletion - sync calls this
+        // with the caller bearer (LocalApi policy); removes grants + record
+        public async Task<IActionResult> DeleteUserAccount([FromQuery] string clientId, [FromQuery] string userId, [FromQuery] string? password)
+        {
+            if (UserManager.GetUserId(User) != userId) return Forbid();
+            var user = await UserManager.FindByIdAsync(userId);
+            if (user == null) return Ok();
+            var client = Clients.FindClientById(clientId);
+            if (client == null) return BadRequest("Invalid client_id.");
+            if (await UserManager.HasPasswordAsync(user) && (string.IsNullOrEmpty(password) || !await UserManager.CheckPasswordAsync(user, password)))
+                return BadRequest("Invalid password.");
+            await PersistedGrantStore.RemoveAllAsync(new PersistedGrantFilter { SubjectId = userId });
+            var result = await UserManager.DeleteAsync(user);
+            if (!result.Succeeded)
+                return BadRequest(string.Join(" ", result.Errors.Select((e) => e.Description)));
+            return Ok();
         }
 
         [HttpPost("recover")]
