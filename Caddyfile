@@ -11,6 +11,11 @@
 }
 
 :80 {
+    # ponytail: access log for per-request timing (blame split app-vs-server)
+    log {
+        output stdout
+        format json
+    }
     # Caddy health
     handle /health {
         respond "Healthy"
