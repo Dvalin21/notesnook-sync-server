@@ -31,6 +31,7 @@
     @cors host cors.{$DOMAIN}
     @inbox host inbox.{$DOMAIN}
     @themes host themes.{$DOMAIN}
+    @app host app.{$DOMAIN}
 
     handle @sync {
         reverse_proxy notesnook-server:5264 {
@@ -53,8 +54,20 @@
         }
     }
     handle @attach {
+        # ponytail: browser CORS is answered here, not MinIO (its bucket
+        # CORS API is unimplemented in this build). Web UI origin only.
+        @attach_preflight method OPTIONS
+        handle @attach_preflight {
+            header Access-Control-Allow-Origin https://app.example.com
+            header Access-Control-Allow-Methods "PUT, GET, HEAD, DELETE"
+            header Access-Control-Allow-Headers *
+            header Access-Control-Max-Age 86400
+            respond "" 204
+        }
         reverse_proxy notesnook-s3:9000 {
             header_up X-Forwarded-Host {http.request.host}
+            header_down Access-Control-Allow-Origin https://app.example.com
+            header_down Access-Control-Expose-Headers ETag
         }
     }
     handle @minio {
@@ -74,6 +87,11 @@
     }
     handle @themes {
         reverse_proxy themes-server:9000 {
+            header_up X-Forwarded-Host {http.request.host}
+        }
+    }
+    handle @app {
+        reverse_proxy web:80 {
             header_up X-Forwarded-Host {http.request.host}
         }
     }
