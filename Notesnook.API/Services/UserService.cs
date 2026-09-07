@@ -114,7 +114,21 @@ namespace Notesnook.API.Services
                 subscription = new Subscription { AppId = ApplicationType.NOTESNOOK, Provider = SubscriptionProvider.STREETWRITERS, Plan = SubscriptionPlan.BELIEVER, Status = SubscriptionStatus.ACTIVE, UserId = userId, StartDate = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ExpiryDate = DateTimeOffset.UtcNow.AddYears(1).ToUnixTimeMilliseconds() };
             }
 
-            var userSettings = await Repositories.UsersSettings.FindOneAsync((u) => u.UserId == user.UserId) ?? throw new Exception("User settings not found.");
+            // ponytail: login-first users (email-grant auto-creates identity
+            // accounts) never ran sync signup, so provision defaults on demand
+            // instead of failing every fetch
+            var userSettings = await Repositories.UsersSettings.FindOneAsync((u) => u.UserId == user.UserId);
+            if (userSettings == null)
+            {
+                userSettings = new UserSettings
+                {
+                    UserId = user.UserId,
+                    StorageLimit = new Limit { UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Value = 0 },
+                    LastSynced = 0,
+                    Salt = GetSalt()
+                };
+                await Repositories.UsersSettings.InsertAsync(userSettings);
+            }
 
             // reset user's attachment limit every month
             var limit = StorageHelper.RolloverStorageLimit(userSettings.StorageLimit);
