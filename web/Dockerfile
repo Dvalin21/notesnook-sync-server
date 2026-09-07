@@ -6,6 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 RUN git clone https://github.com/streetwriters/notesnook.git . \
  && git checkout 143892e260532cbe80d194fbbedd8955b70ef025
 RUN npm ci
+# Self-host wiring: upstream web reads NN_<HOST> at build time
+# (vite envPrefix) - without these it defaults to official infra.
+ARG NN_API_HOST NN_AUTH_HOST NN_SSE_HOST NN_MONOGRAPH_HOST
+ENV NN_API_HOST=${NN_API_HOST} NN_AUTH_HOST=${NN_AUTH_HOST} NN_SSE_HOST=${NN_SSE_HOST} NN_MONOGRAPH_HOST=${NN_MONOGRAPH_HOST}
 RUN npm run build:web
 # Production Stage
 FROM nginx:1.28-alpine
