@@ -42,26 +42,26 @@ Your external proxy terminates TLS.
 
 ---
 
-## Verified status (2026-09-06)
+## Verified status (2026-09-06, images `:20260906b`)
 
-Live stack, images `:20260906`: all 11 services healthy. Proven end to end
-with Android clients on two devices: signup → confirmation email → email
-confirm → MFA-code login (both devices) → cross-device note sync → image
-attachments (upload, render, across relogin) → monograph publish/view.
-14/14 infrastructure checks green.
+Live stack: all 11 services healthy. Proven end to end with Android
+clients on two devices: signup (seconds) → confirmation email → email
+confirm → MFA-code login on both devices (mail in seconds) →
+cross-device note sync → image attachments (upload, render, across
+relogin) → monograph publish/view. 14/14 infrastructure checks green.
 
 ### Works
 - Account lifecycle: signup, confirm link, email-MFA login, profile, tokens
 - Notes sync both directions across devices; attachment blobs in MinIO
 - Real-mailbox delivery (confirmation + 2FA via prod SMTP)
-- Rate limiting (6 MFA sends/min/user); self-host entitlements (BELIEVER)
+- Rate limiting (6 MFA sends/min/user, fails fast over limit)
+- Self-host entitlements (BELIEVER); no request can hang on dead WAMP
+  endpoints (retries bounded) and confirm never fails on notify errors
 
 ### Known gaps (code)
 - Password change disabled (`PATCH /users/password/*`); clear-sessions
   (`ClearSessionsAsync`) not implemented — logout-everywhere fails
 - SSE live push degraded (inter-service WAMP removed from SSE; clients poll)
-- MFA bursts over the limit queue silently instead of failing fast (kept)
-- Calls to a dead WAMP endpoint retry forever (no bound) — fix parked
 
 ### Not yet tested
 Account delete, email change, recovery mail/codes, authenticator-app MFA,
@@ -74,6 +74,13 @@ use MongoDB .NET driver 3.2.1, which supports Server 8.x: boot + CRUD
 verified against `mongo:8.0.29` in isolation, and a separate 8.0.29 stack
 has soaked healthy for days. Full account E2E was proven on 7.0.12 —
 re-run the checklist after any major Mongo upgrade.
+
+### Ops notes
+- `SELF_HOSTED` must be `1` in `.env`. At `0` the signup path calls
+  cloud subscription endpoints that cannot work here and the request
+  hangs until the proxy times out.
+- Never `down -v` a live stack: it wipes Mongo, keystore (GPG + signing
+  keys), and MinIO. Use `up -d` / `restart`; data lives in named volumes.
 
 ---
 ## Prerequisites
