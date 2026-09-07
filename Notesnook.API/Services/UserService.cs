@@ -65,13 +65,18 @@ namespace Notesnook.API.Services
                 else throw new Exception("Could not create a new account.");
             }
 
-            await Repositories.UsersSettings.InsertAsync(new UserSettings
+            // ponytail: retried signups (e.g. after a proxy timeout) must not
+            // stack duplicate settings rows - one row per user, always
+            if (await Repositories.UsersSettings.FindOneAsync((u) => u.UserId == response.UserId) == null)
             {
-                UserId = response.UserId,
-                StorageLimit = new Limit { UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Value = 0 },
-                LastSynced = 0,
-                Salt = GetSalt()
-            });
+                await Repositories.UsersSettings.InsertAsync(new UserSettings
+                {
+                    UserId = response.UserId,
+                    StorageLimit = new Limit { UpdatedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Value = 0 },
+                    LastSynced = 0,
+                    Salt = GetSalt()
+                });
+            }
 
             if (!Constants.IS_SELF_HOSTED)
             {
@@ -226,7 +231,7 @@ namespace Notesnook.API.Services
             Repositories.Tags.DeleteByUserId(userId);
             Repositories.Vaults.DeleteByUserId(userId);
             Repositories.InboxItemsHistory.DeleteByUserId(userId);
-            Repositories.UsersSettings.Delete((u) => u.UserId == userId);
+            Repositories.UsersSettings.DeleteMany((u) => u.UserId == userId); // ponytail: Delete() removes ONE row - dup settings rows survived purges
             Repositories.Monographs.DeleteMany((m) => m.UserId == userId);
             Repositories.InboxApiKey.DeleteMany((t) => t.UserId == userId);
 
