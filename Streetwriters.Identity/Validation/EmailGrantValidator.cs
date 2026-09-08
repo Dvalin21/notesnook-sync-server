@@ -78,50 +78,16 @@ namespace Streetwriters.Identity.Validation
             var email = context.Request.Raw["email"];
             var clientId = context.Request.ClientId;
             var existingUser = await UserManager.FindRegisteredUserAsync(email, clientId);
-            var isNewUser = existingUser == null;
-
-            var user = existingUser ?? new User
+            if (existingUser == null)
             {
-                Email = email,
-                UserName = email,
-                NormalizedEmail = email,
-                NormalizedUserName = email,
-                EmailConfirmed = false,
-                SecurityStamp = ""
-            };
-
-            if (isNewUser)
-            {
-                if (await RoleManager.FindByNameAsync(clientId) == null)
-                {
-                    await RoleManager.CreateAsync(new MongoRole(clientId));
-                }
-
-                var createResult = await UserManager.CreateAsync(user);
-                if (!createResult.Succeeded)
-                {
-                    context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant);
-                    return;
-                }
-                await UserManager.AddToRoleAsync(user, clientId);
-
-                // Send confirmation email (ponytail: ALWAYS confirm email)
-                // If email fails, log error but dont fail the grant
-                try
-                {
-                    var code = await UserManager.GenerateEmailConfirmationTokenAsync(user);
-                    var client = Clients.FindClientById(clientId);
-                    var callbackUrl = UrlExtensions.TokenLink(user.Id.ToString(), code, client.Id, TokenType.CONFRIM_EMAIL);
-                    if (!string.IsNullOrEmpty(user.Email) && callbackUrl != null)
-                    {
-                        await EmailSender.SendConfirmationEmailAsync(user.Email, callbackUrl, client);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[EmailGrantValidator] Failed to send confirmation email: {ex.Message}");
-                }
+                // ponytail: login must never manufacture accounts. Unknown
+                // emails fail here (upstream behavior); accounts - and their
+                // confirmation mail - come only from explicit signup.
+                context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant);
+                return;
             }
+
+            var user = existingUser;
 
             var isMultiFactor = await UserManager.GetTwoFactorEnabledAsync(user);
             var primaryMethod = isMultiFactor ? MFAService.GetPrimaryMethod(user) : MFAMethods.Email;
