@@ -421,11 +421,13 @@ Enter these exact values:
 
 || Field in app | Value |
 |---|---|
-| Auth URL / Identity server | `https://auth.example.com` |
-| Sync URL / Sync server | `https://sync.example.com` |
-| Monograph URL (web only) | `https://notes.example.com` |
+| Sync server | `https://sync.example.com` |
+| Auth server | `https://auth.example.com` |
+| Events server | `https://sse.example.com` |
+| Monograph server | `https://notes.example.com` |
 
-The Android client has exactly three URL fields. `ATTACHMENTS_SERVER_PUBLIC_URL`
+The Android client has four URL fields (all required - the Test-connection
+check validates each one). `ATTACHMENTS_SERVER_PUBLIC_URL`
 is **not** entered in Settings — the server uses it internally to generate S3
 presigned URLs that the client receives via the sync server's `/s3` endpoint.
 
