@@ -3,3 +3,5 @@
 **/obj
 **/.env
 **/.env.local
+**/appsettings.*.Development.json
+**/Properties/launchSettings.json
