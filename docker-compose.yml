@@ -326,6 +326,26 @@ services:
     networks:
     - notesnook
     restart: 'no'
+  backup:
+    command: sh /backup.sh
+    depends_on:
+      notesnook-db:
+        condition: service_healthy
+    image: mongo:7.0.12
+    networks:
+    - notesnook
+    profiles:
+    - backup
+    restart: 'no'
+    volumes:
+    - ./backup.sh:/backup.sh:ro
+    - ./backups:/backups
+    - dbdata:/vol/dbdata:ro
+    - dpdata-identity:/vol/dpdata-identity:ro
+    - dpdata-notesnook:/vol/dpdata-notesnook:ro
+    - dpdata-sse:/vol/dpdata-sse:ro
+    - dpdata-monograph:/vol/dpdata-monograph:ro
+    - keystore-data:/vol/keystore-data:ro
   sse-server:
     depends_on:
       identity-server:
