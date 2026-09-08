@@ -162,6 +162,12 @@ services:
     - dpdata-sse:/data/sse
     - keystore-data:/data/keystore
   monograph-server:
+    # Rebuild for YOUR domain: set NOTESNOOK_APP_HOST in .env, then
+    # docker compose build monograph-server (prebuilt :latest = example).
+    build:
+      context: ./monograph
+      args:
+        NOTESNOOK_APP_URL: ${NOTESNOOK_APP_HOST:-https://app.notesnook.com}
     depends_on:
       notesnook-server:
         condition: service_healthy
