@@ -35,7 +35,7 @@ Your external proxy terminates TLS.
 5. `init-dpdata` one-shot container fixes volume permissions automatically on first boot.
 6. MongoDB is NOT exposed on a host port.
 7. Healthchecks use `nc` for .NET services, `node` for cors-proxy, and `bun` for monograph — instead of `wget`.
-8. App services run custom images (`dvalin21/notesnook-sync`, `-identity`, `-sse`, all `:latest` = verified build); `monograph:1.3.1`, upstream inbox/themes; infra: `caddy:alpine`, `alpine:latest`, `willfarrell/autoheal:latest`, `vandot/alpine-bash`.
+8. App services run custom images (`dvalin21/notesnook-sync`, `-identity`, `-sse`, `-monograph`, `-web`, all `:latest` = verified build); upstream inbox/themes; infra: `caddy:alpine`, `alpine:latest`, `willfarrell/autoheal:latest`, `vandot/alpine-bash`. Monograph bakes `NOTESNOOK_APP_URL` so Publish links point at your app, not official SaaS.
 9. `setup-s3` fails fast if `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` are missing.
 10. Caddy internal reverse proxy routes all traffic through a single port (8080).
 11. MinIO runs custom `dvalin21/minio-notesnook:latest` (console on :9090); mc pinned to `RELEASE.2025-08-13T08-35-41Z` for setup-s3.
@@ -534,12 +534,11 @@ Or leave the services running but unconfigured — they consume minimal resource
 ### Backups
 
 ```bash
-# MongoDB
-docker compose exec notesnook-db mongodump \
-  --uri="mongodb://notesnook-db:27017/notesnook" \
-  --archive=/backup/notesnook-$(date +%Y%m%d).archive
+# MongoDB (fsyncLock + tar) + all dpdata-* volumes + keystore.
+# Dumps land in ./backups/<UTC-stamp>/ — copy off-host, then schedule it (cron).
+docker compose --profile backup run --rm backup
 
-# MinIO attachments (from host)
+# MinIO attachments (from host) — NOT covered above, mirror separately
 docker run --rm -v notesnook-sync-server_s3data:/data -v /backup/s3:/backup \
   alpine tar czf /backup/s3/minio-$(date +%Y%m%d).tar.gz -C /data .
 ```

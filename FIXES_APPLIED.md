@@ -11,7 +11,20 @@ Upstream: streetwriters/notesnook-sync-server (no Caddy, `:latest` tags).
 | CORS proxy | None | Built from `./cors-proxy` source |
 | Health monitor | None | `restart: unless-stopped` on all services |
 | S3 exposure | Port 9000 exposed | Port 9000 exposed (remove for strict Caddy-only) |
-| Image tags | `:latest` for all | Pinned to specific versions |
+| Image tags | `:latest` for all | Pinned digests/tags per table below |
+| Monograph app links | Hardcoded `https://app.notesnook.com` | `dvalin21/notesnook-monograph` bakes `NOTESNOOK_APP_URL` at build |
+
+## Custom images — what changed vs upstream source
+
+| Image | Base | Source diff |
+|---|---|---|
+| `dvalin21/notesnook-sync` | upstream sync | MongoDB driver 2.22→3.2.1 (Mongo 8 wire), caller bearer forwarded to identity, missing `await` in users path, WAMP middleware ordering, static `HttpClient` in S3 path, `MongoDbSettings__*` env support |
+| `dvalin21/notesnook-identity` | upstream identity | `profile` scope for Notesnook 3.x OIDC, GPG persisted via keystore volume + entrypoint, `X-Forwarded-Host`/template reformat, working password change/reset/delete, fail-closed login (no auto-create) |
+| `dvalin21/notesnook-sse` | upstream sse | WAMP removed (.NET 9 incompatible), session-clear notify best-effort |
+| `dvalin21/notesnook-monograph` | upstream monograph 1.3.1 (same monorepo pin as web image) | `NOTESNOOK_APP_URL` build arg replaces hardcoded `app.notesnook.com` in header/footer/landing "Publish a note" links; `NOTESNOOK_APP_HOST` env is ignored by upstream and stays a no-op |
+| `dvalin21/notesnook-web` | upstream web @ same pin | `NN_API/AUTH/SSE/MONOGRAPH_HOST` baked at build so clients default to self-hosted |
+| `dvalin21/notesnook-cors-proxy` | `./cors-proxy` source | Preflight fix, logging cleanup |
+| `dvalin21/minio-notesnook` | minio | Pinned rebuild (no source fork) |
 
 ## Changes from upstream source code
 
@@ -37,13 +50,16 @@ Upstream: streetwriters/notesnook-sync-server (no Caddy, `:latest` tags).
 
 | Image | Tag | Reason |
 |---|---|---|
-| mongo | 8.0.28 | Upgraded from 7.0.12 (FCV migration required) |
+| mongo | 7.0.12 | Runtime pin in compose (8.x upgrade needs FCV migration + deploy test) |
 | minio/minio | `RELEASE.2025-09-07T16-13-09Z` | Immutable timestamp tag |
 | minio/mc | `RELEASE.2025-08-13T08-35-41Z` | Bucket setup tool (one-shot) |
-| streetwriters/identity | v1.0-beta.32 | Immutable tag (was `:latest`) |
-| streetwriters/notesnook-sync | v1.0-beta.32 | Same |
-| streetwriters/sse | v1.0-beta.32 | Same |
-| streetwriters/monograph | 1.3.1 | Stable version tag |
+| dvalin21/notesnook-sync | `latest` + dated | Custom build (see table above) |
+| dvalin21/notesnook-identity | `latest` + dated | Custom build (see table above) |
+| dvalin21/notesnook-sse | `latest` + dated | Custom build (see table above) |
+| dvalin21/notesnook-monograph | `latest` + `20260908` | Custom build (see table above) |
+| dvalin21/notesnook-web | `latest` | Custom build (see table above) |
+| streetwriters/notesnook-inbox | `latest` | Upstream, unmodified |
+| streetwriters/themes-server | `latest` | Upstream, unmodified |
 | caddy | alpine | Small image, internal routing only |
 | cors-proxy | *(build from source)* | Custom CORS proxy |
 | vandot/alpine-bash | `:latest` | One-shot validate service (low risk) |
@@ -57,5 +73,7 @@ not healthcheck failures. autoheal covers that gap.
 ## Known issues (not fixed here)
 
 - Client/server version skew: app 3.3 broke self-hosted sync. Pin client to 3.2.4 if hit.
-- DataProtection keys in a Docker named volume — back up `dpdata` or lose tokens on volume loss.
+- Backups: use the profile-gated service — `docker compose --profile backup run --rm backup`
+  (fsyncLock + tar of dbdata, all `dpdata-*`, keystore; dumps land in `./backups/<stamp>/`,
+  tested round-trip 2026-09-08). s3data blobs excluded — mirror MinIO separately.
 - Monograph PDF viewing has pre-existing issues unrelated to the S3 backend.
