@@ -168,6 +168,16 @@ namespace Notesnook.API.Services
             };
         }
 
+        public async Task<bool> ChangeUserPasswordAsync(string userId, string oldPassword, string newPassword)
+        {
+            return await UserAccountService.ChangePasswordAsync(userId, oldPassword, newPassword);
+        }
+
+        public async Task<bool> ResetUserPasswordAsync(string userId, string newPassword)
+        {
+            return await UserAccountService.ResetPasswordAsync(userId, newPassword);
+        }
+
         public async Task SetUserKeysAsync(string userId, UserKeys keys)
         {
             var userSettings = await Repositories.UsersSettings.FindOneAsync((u) => u.UserId == userId) ?? throw new Exception("User not found.");
