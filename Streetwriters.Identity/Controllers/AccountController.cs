@@ -364,12 +364,21 @@ namespace Streetwriters.Identity.Controllers
 
         private async Task SendMessageAsync(string userId, Message message)
         {
-            await WampServers.MessengerServer.PublishMessageAsync(MessengerServerTopics.SendSSETopic, new SendSSEMessage
+            // ponytail: SSE notify is best-effort (SSE has no WAMP listener)
+            // - never fail the calling operation because broadcast is down
+            try
             {
-                UserId = userId,
-                OriginTokenId = User.FindFirstValue("jti"),
-                Message = message
-            });
+                await WampServers.MessengerServer.PublishMessageAsync(MessengerServerTopics.SendSSETopic, new SendSSEMessage
+                {
+                    UserId = userId,
+                    OriginTokenId = User.FindFirstValue("jti"),
+                    Message = message
+                });
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "SSE broadcast failed for user {UserId}", userId);
+            }
         }
     }
 }
