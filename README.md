@@ -56,16 +56,15 @@ relogin) → monograph publish/view. 14/14 infrastructure checks green.
 - Notes sync both directions across devices; attachment blobs in MinIO
 - Real-mailbox delivery (confirmation + 2FA via prod SMTP)
 - Rate limiting (6 MFA sends/min/user, fails fast over limit)
+- Password change + reset via recovery mail; session revocation
 - Self-host entitlements (BELIEVER); no request can hang on dead WAMP
   endpoints (retries bounded) and confirm never fails on notify errors
 
 ### Known gaps (code)
-- Password change disabled (`PATCH /users/password/*`); clear-sessions
-  (`ClearSessionsAsync`) not implemented — logout-everywhere fails
 - SSE live push degraded (inter-service WAMP removed from SSE; clients poll)
 
 ### Not yet tested
-Account delete, email change, recovery mail/codes, authenticator-app MFA,
+Email change, recovery codes, authenticator-app MFA,
 multipart (>5MB) uploads, inbox end-to-end (needs MX routing), quota,
 refresh past 1h.
 
