@@ -13,6 +13,7 @@ YOUR TLS PROXY :443  →  this host :8080  →  Caddy :80  →  by Host header:
   sse.example.com      →  sse-server:7264  
   notes.example.com    →  monograph-server:3000  
   example.com          →  monograph-server:3000  
+  app.example.com      →  web:80  (web client)
   attach.example.com   →  notesnook-s3:9000  
   minio.example.com    →  notesnook-s3:9090  (MinIO console — optional)  
   cors.example.com     →  cors-proxy:3000  
@@ -109,7 +110,8 @@ This single record covers all subdomains the stack needs:
 | `auth.example.com` | Identity / OAuth server |
 | `sse.example.com` | Server-Sent Events / SignalR real-time sync |
 | `notes.example.com` | Monograph web client |
-| `example.com` | Web client (apex/root) |
+| `example.com` | Monograph web client (apex/root) |
+| `app.example.com` | Full Notesnook web client |
 | `attach.example.com` | S3-compatible attachment storage (MinIO) |
 || `cors.example.com` | CORS proxy for external image embeds |
 || `inbox.example.com` | Inbox API — accepts encrypted inbox notifications POSTed by the Notesnook app (optional) |
@@ -372,6 +374,7 @@ curl -fsS -H "Host: example.com"        http://localhost:8080/api/health
 curl -fsS -H "Host: attach.example.com" http://localhost:8080/health
 curl -fsS -H "Host: minio.example.com"  http://localhost:8080/
 curl -fsS -H "Host: cors.example.com"   http://localhost:8080/health
+curl -fsS -H "Host: app.example.com"    http://localhost:8080/health
 curl -fsS -H "Host: inbox.example.com"  http://localhost:8080/health
 curl -fsS -H "Host: themes.example.com" http://localhost:8080/health
 ```
@@ -394,12 +397,12 @@ the host. If from another machine, replace `localhost` with your server's IP.
 
 ### 6. Create your first account
 
-Signup must be done through the **Notesnook mobile or desktop app** —
+Signup can be done through the **Notesnook mobile app, desktop app, or the self-hosted web client** (see below) —
 the Monograph web client (`notes.example.com`) has no registration page.
 
 The registration endpoint is `POST /users` on the sync server
 (`sync.example.com/users`), NOT the identity server. Internally the sync
-server calls the identity server via WAMP RPC (not HTTP). Your account is
+server calls the identity server over HTTP (server-to-server, bearer forwarded). Your account is
 created in **your MongoDB** on your server — nothing goes to Notesnook's cloud.
 
 1. Edit `.env` and set `DISABLE_SIGNUPS=false`
@@ -434,6 +437,15 @@ Settings → Servers → Add custom server. Same URLs as above.
 
 Navigate to `https://notes.example.com` or `https://example.com` for the
 Monograph web client (read-only note sharing — no account management).
+
+**Self-hosted web client (`https://app.example.com`):**
+
+Full Notesnook web app (notes, sync, import/export, backup, monograph
+publishing) running from this stack. Server URLs are baked in at image
+build time from your public URLs, so login/signup work out of the box;
+they can still be changed per-browser in Settings -> Servers. Attachment
+upload/download in the browser works via presigned S3 URLs (browser CORS
+is answered at the proxy).
 
 ---
 
