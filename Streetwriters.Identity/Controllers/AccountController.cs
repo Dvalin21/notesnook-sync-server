@@ -202,6 +202,26 @@ namespace Streetwriters.Identity.Controllers
             return Ok();
         }
 
+        [HttpPost("change-password")]
+        public async Task<IActionResult> ChangePassword([FromForm] string clientId, [FromForm] string userId, [FromForm] string oldPassword, [FromForm] string newPassword)
+        {
+            if (UserManager.GetUserId(User) != userId) return Forbid();
+            if (Clients.FindClientById(clientId) == null) return BadRequest("Invalid client_id.");
+            if (!await UserAccountService.ChangePasswordAsync(userId, oldPassword, newPassword))
+                return BadRequest("Password change failed.");
+            return Ok();
+        }
+
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword([FromForm] string clientId, [FromForm] string userId, [FromForm] string newPassword)
+        {
+            if (UserManager.GetUserId(User) != userId) return Forbid();
+            if (Clients.FindClientById(clientId) == null) return BadRequest("Invalid client_id.");
+            if (!await UserAccountService.ResetPasswordAsync(userId, newPassword))
+                return BadRequest("Password reset failed.");
+            return Ok();
+        }
+
         [HttpPost("recover")]
         [AllowAnonymous]
         [EnableRateLimiting("strict")]

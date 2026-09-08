@@ -67,8 +67,35 @@ namespace Notesnook.API.Services
             var response = await client.SendAsync(request);
         }
 
-        public Task<bool> ChangePasswordAsync(string userId, string oldPassword, string newPassword) => throw new NotImplementedException();
-        public Task<bool> ResetPasswordAsync(string userId, string newPassword) => throw new NotImplementedException();
+        public async Task<bool> ChangePasswordAsync(string userId, string oldPassword, string newPassword)
+        {
+            var client = _httpClientFactory.CreateClient("IdentityServer");
+            var request = new HttpRequestMessage(HttpMethod.Post, "/account/change-password");
+            ForwardCallerAuth(request);
+            request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["clientId"] = Streetwriters.Common.Clients.Notesnook.Id,
+                ["userId"] = userId,
+                ["oldPassword"] = oldPassword,
+                ["newPassword"] = newPassword
+            });
+            var response = await client.SendAsync(request);
+            return response.IsSuccessStatusCode;
+        }
+        public async Task<bool> ResetPasswordAsync(string userId, string newPassword)
+        {
+            var client = _httpClientFactory.CreateClient("IdentityServer");
+            var request = new HttpRequestMessage(HttpMethod.Post, "/account/reset-password");
+            ForwardCallerAuth(request);
+            request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["clientId"] = Streetwriters.Common.Clients.Notesnook.Id,
+                ["userId"] = userId,
+                ["newPassword"] = newPassword
+            });
+            var response = await client.SendAsync(request);
+            return response.IsSuccessStatusCode;
+        }
         public Task<bool> ClearSessionsAsync(string userId, string clientId, bool all, string jti, string refreshToken) => throw new NotImplementedException();
     }
 }
