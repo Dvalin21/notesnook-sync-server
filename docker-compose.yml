@@ -94,7 +94,7 @@ services:
       MONGODB_DATABASE_NAME: identity
       MongoDbSettings__ConnectionString: mongodb://notesnook-db:27017/identity?replicaSet=rs0&tls=false&directConnection=true
       MongoDbSettings__DatabaseName: identity
-      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_HOST}
       NOTESNOOK_SERVER_HOST: notesnook-server
       NOTESNOOK_SERVER_PORT: 5264
       SELF_HOSTED: ${SELF_HOSTED:-1}
@@ -180,7 +180,7 @@ services:
       IDENTITY_SERVER_HOST: identity-server
       IDENTITY_SERVER_PORT: 8264
       IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
-      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_HOST}
       NOTESNOOK_SERVER_HOST: notesnook-server
       NOTESNOOK_SERVER_PORT: 5264
       PUBLIC_URL: ${MONOGRAPH_PUBLIC_URL}
@@ -280,7 +280,7 @@ services:
       IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
       MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/?replSet=rs0
       MONGODB_DATABASE_NAME: notesnook
-      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_HOST}
       NOTESNOOK_SERVER_HOST: notesnook-server
       NOTESNOOK_SERVER_PORT: 5264
       S3_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -346,7 +346,7 @@ services:
       IDENTITY_SERVER_HOST: identity-server
       IDENTITY_SERVER_PORT: 8264
       IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
-      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_HOST}
       NOTESNOOK_SERVER_HOST: notesnook-server
       NOTESNOOK_SERVER_PORT: 5264
       SELF_HOSTED: ${SELF_HOSTED:-1}
@@ -429,7 +429,7 @@ services:
     - -c
     - "required_vars=(\n  \"SERVER_DOMAIN\"\n  \"INSTANCE_NAME\"\n  \"NOTESNOOK_API_SECRET\"\
       \n  \"DISABLE_SIGNUPS\"\n  \"AUTH_SERVER_PUBLIC_URL\"\n  \"NOTESNOOK_APP_PUBLIC_URL\"\
-      \n  \"MONOGRAPH_PUBLIC_URL\"\n  \"ATTACHMENTS_SERVER_PUBLIC_URL\"\n)\nfor var\
+      \n  \"MONOGRAPH_PUBLIC_URL\"\n  \"ATTACHMENTS_SERVER_PUBLIC_URL\"\n  \"NOTESNOOK_APP_HOST\"\n)\nfor var\
       \ in \"$${required_vars[@]}\"; do\n  if [ -z \"$${!var}\" ]; then\n    echo\
       \ \"Error: Required environment variable $$var is not set.\"\n    exit 1\n \
       \ fi\ndone\necho \"All required environment variables are set.\"\n"
@@ -452,7 +452,7 @@ x-server-discovery:
   IDENTITY_SERVER_HOST: identity-server
   IDENTITY_SERVER_PORT: 8264
   IDENTITY_SERVER_URL: ${AUTH_SERVER_PUBLIC_URL}
-  NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+  NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_HOST}
   NOTESNOOK_SERVER_HOST: notesnook-server
   NOTESNOOK_SERVER_PORT: 5264
   SELF_HOSTED: ${SELF_HOSTED:-1}

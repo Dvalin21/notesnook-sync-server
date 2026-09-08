@@ -240,6 +240,7 @@ Every `CHANGEME-*` value must be replaced. Here is every field explained:
 | `AUTH_SERVER_PUBLIC_URL` | Yes — required by `validate` service | `https://auth.example.com` |
 | `MONOGRAPH_PUBLIC_URL` | Yes — required by `validate` service + monograph container | `https://notes.example.com` |
 | `ATTACHMENTS_SERVER_PUBLIC_URL` | Yes — required by `validate` service | `https://attach.example.com` |
+| `NOTESNOOK_APP_HOST` | Yes — required by `validate` service | Web client origin for recovery/verified links, `https://app.example.com` (NOT the sync URL) |
 | `MINIO_ROOT_USER` | No — but `setup-s3` will fail if empty | Generate with `openssl rand -base64 12`. Not checked by `validate`; `setup-s3` refuses to start if blank. |
 | `MINIO_ROOT_PASSWORD` | No — but `setup-s3` will fail if empty | Generate with `openssl rand -base64 22`. Not checked by `validate`; `setup-s3` refuses to start if blank. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | No — optional, warn if missing | Leave blank if not using email features |
