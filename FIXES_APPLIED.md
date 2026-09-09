@@ -50,7 +50,7 @@ Upstream: streetwriters/notesnook-sync-server (no Caddy, `:latest` tags).
 
 | Image | Tag | Reason |
 |---|---|---|
-| mongo | 8.0.29 | Upgraded 7.0.12→8.0 (consecutive major; FCV stepped post-boot) |
+| mongo | 8.0.30 | 7.0.12→8.0 (consecutive major; FCV stepped post-boot). 8.0.30 required: ≤8.0.29 refuse kernels 6.19–7.0.13 (SERVER-121912) |
 | minio/minio | `RELEASE.2025-09-07T16-13-09Z` | Immutable timestamp tag |
 | minio/mc | `RELEASE.2025-08-13T08-35-41Z` | Bucket setup tool (one-shot) |
 | dvalin21/notesnook-sync | `latest` + dated | Custom build (see table above) |
