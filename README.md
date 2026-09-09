@@ -548,15 +548,28 @@ Or leave the services running but unconfigured — they consume minimal resource
 
 ### Backups
 
+Three layers; no single one restores everything (see `backup.sh` header for the why):
+
 ```bash
-# MongoDB (fsyncLock + tar) + all dpdata-* volumes + keystore.
-# Dumps land in ./backups/<UTC-stamp>/ — copy off-host, then schedule it (cron).
+# 1. Stack state: Mongo (fsyncLock + tar) + all dpdata-* + keystore + .env snapshot.
+#    Dumps land in ./backups/<UTC-stamp>/ (gitignored) — copy off-host, cron it.
 docker compose --profile backup run --rm backup
 
-# MinIO attachments (from host) — NOT covered above, mirror separately
-docker run --rm -v notesnook-sync-server_s3data:/data -v /backup/s3:/backup \
-  alpine tar czf /backup/s3/minio-$(date +%Y%m%d).tar.gz -C /data .
+# 2. Attachments (bulk blobs — mirrored, never tarred; tar would stall the stack
+#    and duplicate what MinIO already versions). Needs MINIO_ROOT_* from .env:
+source .env
+docker run --rm --network notesnook-sync-server_notesnook \
+  -e MC_HOST_src=https://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@notesnook-s3:9000 \
+  -v /backup/s3:/dest minio/mc:RELEASE.2025-08-13T08-35-41Z \
+  mirror --overwrite src/attachments /dest
+
+# 3. Per-user client exports (web UI → Backup). Ultimate parachute: restores notes
+#    into ANY Notesnook, but carries no accounts/shares/keys. Users own this one.
 ```
+
+Restore order: `.env` → volumes back in place → `up -d` → users re-login only if
+dpdata was lost. Loss matrix: no dpdata = sessions die (data safe); no keystore =
+regenerate GPG (old verify links die); no `.env` = rebuilt stack, everyone re-registers.
 
 ### Updates
 
