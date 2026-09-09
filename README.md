@@ -43,9 +43,9 @@ Your external proxy terminates TLS.
 
 ---
 
-## Verified status (2026-09-06, images `:20260906b`)
+## Verified status (2026-09-08, images `:latest`)
 
-Live stack: all 11 services healthy. Proven end to end with Android
+Live stack: all services healthy. Proven end to end with Android
 clients on two devices: signup (seconds) → confirmation email → email
 confirm → MFA-code login on both devices (mail in seconds) →
 cross-device note sync → image attachments (upload, render, across
@@ -57,23 +57,31 @@ relogin) → monograph publish/view. 14/14 infrastructure checks green.
 - Real-mailbox delivery (confirmation + 2FA via prod SMTP)
 - Rate limiting (6 MFA sends/min/user, fails fast over limit)
 - Password change + reset via recovery mail; session revocation
+- MFA recovery codes (`/mfa/codes`, user-verified Sep 8)
+- Inbox end to end: key auth → encrypt → store → received in app (Sep 8;
+  no mail involved — the relay is pure HTTP, no MX routing needed)
+- Monograph viewer links point at your app domain (placeholder image +
+  per-request rewrite from `NOTESNOOK_APP_HOST`)
+- Volume backups: `--profile backup` round-trip tested (mongo fsyncLock
+  tar + all `dpdata-*` + keystore)
 - Self-host entitlements (BELIEVER); no request can hang on dead WAMP
   endpoints (retries bounded) and confirm never fails on notify errors
 
 ### Known gaps (code)
 - SSE live push degraded (inter-service WAMP removed from SSE; clients poll)
+- Web themes browser still queries official `themes-api.notesnook.com`
+  (upstream default; cosmetic, no account data leaves)
 
 ### Not yet tested
-Email change, recovery codes, authenticator-app MFA,
-multipart (>5MB) uploads, inbox end-to-end (needs MX routing), quota,
-refresh past 1h.
+Email change, authenticator-app MFA enrollment,
+multipart (>5MB) uploads, quota, refresh past 1h.
 
 ### MongoDB
 This stack runs `dvalin21/notesnook-db:7.0.12` (single-node rs0). App images
-use MongoDB .NET driver 3.2.1, which supports Server 8.x: boot + CRUD
-verified against `mongo:8.0.29` in isolation, and a separate 8.0.29 stack
-has soaked healthy for days. Full account E2E was proven on 7.0.12 —
-re-run the checklist after any major Mongo upgrade.
+use MongoDB .NET driver 3.2.1, which supports Server 8.x: the prod write
+path (user-row create) is proven against Server 8.0.29, and a separate
+8.0.29 stack has soaked healthy for days. Full account E2E was proven on
+7.0.12 — re-run the checklist after any major Mongo upgrade.
 
 ### Ops notes
 - `SELF_HOSTED` must be `1` in `.env`. At `0` the signup path calls
