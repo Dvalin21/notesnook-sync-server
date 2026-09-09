@@ -58,7 +58,7 @@
         # CORS API is unimplemented in this build). Web UI origin only.
         @attach_preflight method OPTIONS
         handle @attach_preflight {
-            header Access-Control-Allow-Origin https://app.example.com
+            header Access-Control-Allow-Origin {$NOTESNOOK_APP_HOST}
             header Access-Control-Allow-Methods "PUT, GET, HEAD, DELETE"
             header Access-Control-Allow-Headers *
             header Access-Control-Max-Age 86400
@@ -66,7 +66,7 @@
         }
         reverse_proxy notesnook-s3:9000 {
             header_up X-Forwarded-Host {http.request.host}
-            header_down Access-Control-Allow-Origin https://app.example.com
+            header_down Access-Control-Allow-Origin {$NOTESNOOK_APP_HOST}
             header_down Access-Control-Expose-Headers ETag
         }
     }

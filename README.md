@@ -449,13 +449,11 @@ they can still be changed per-browser in Settings -> Servers. Attachment
 upload/download in the browser works via presigned S3 URLs (browser CORS
 is answered at the proxy).
 
-> **Your domain, not ours:** the prebuilt `dvalin21/*` images bake in
-> `example.com` URLs. After setting your URLs in `.env`, rebuild the
-> two baked images so Publish links and defaults point at YOUR app:
-> ```bash
-> docker compose build monograph-server
-> # web client: see web/Dockerfile NN_* args, then point the web service at your build
-> ```
+> **Your domain, not ours:** the prebuilt `dvalin21/*` images ship
+> `example.com` placeholder URLs only. At boot/request they swap in your
+> `.env` URLs automatically — no rebuild needed. (`web/entrypoint.sh` swaps
+> the web bundle at boot; `monograph-server` rewrites per request from
+> `NOTESNOOK_APP_HOST`.)
 
 ---
 
