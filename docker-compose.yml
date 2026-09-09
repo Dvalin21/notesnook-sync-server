@@ -35,6 +35,7 @@ services:
           memory: 32M
     environment:
       DOMAIN: ${SERVER_DOMAIN:-localhost}
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_HOST}
     image: caddy:alpine
     networks:
     - notesnook
@@ -162,12 +163,10 @@ services:
     - dpdata-sse:/data/sse
     - keystore-data:/data/keystore
   monograph-server:
-    # Rebuild for YOUR domain: set NOTESNOOK_APP_HOST in .env, then
-    # docker compose build monograph-server (prebuilt :latest = example).
+    # Source rebuild (same placeholder image; domain arrives via
+    # NOTESNOOK_APP_HOST at runtime, so any domain works unmodified).
     build:
       context: ./monograph
-      args:
-        NOTESNOOK_APP_URL: ${NOTESNOOK_APP_HOST:-https://app.notesnook.com}
     depends_on:
       notesnook-server:
         condition: service_healthy
@@ -424,6 +423,7 @@ services:
         NN_AUTH_HOST: ${AUTH_SERVER_PUBLIC_URL}
         NN_SSE_HOST: ${SSE_SERVER_PUBLIC_URL}
         NN_MONOGRAPH_HOST: ${MONOGRAPH_PUBLIC_URL}
+    env_file: *id001
     deploy:
       resources:
         limits:

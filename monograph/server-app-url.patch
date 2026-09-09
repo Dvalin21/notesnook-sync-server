@@ -1,0 +1,43 @@
+diff --git a/apps/monograph/server.ts b/apps/monograph/server.ts
+index 8f5430a..504e639 100644
+--- a/apps/monograph/server.ts
++++ b/apps/monograph/server.ts
+@@ -32,6 +32,27 @@ const remix = createRequestHandler(
+   Bun.env.NODE_ENV
+ );
+ 
++// Self-host: published images bake APP_URL_PLACEHOLDER instead of any real
++// domain. The operator's domain arrives via NOTESNOOK_APP_HOST at request
++// time (buffered rewrite of html/js bodies; fine at this scale).
++const APP_URL_PLACEHOLDER = "https://app.example.com";
++const APP_URL = process.env.NOTESNOOK_APP_HOST || APP_URL_PLACEHOLDER;
++async function rewriteAppUrl(response: Response) {
++  if (APP_URL === APP_URL_PLACEHOLDER) return response;
++  const type = response.headers.get("content-type") || "";
++  if (!type.includes("text/html") && !type.includes("javascript"))
++    return response;
++  const text = await response.text();
++  if (!text.includes(APP_URL_PLACEHOLDER)) return response;
++  const headers = new Headers(response.headers);
++  headers.delete("content-length");
++  return new Response(text.split(APP_URL_PLACEHOLDER).join(APP_URL), {
++    status: response.status,
++    statusText: response.statusText,
++    headers
++  });
++}
++
+ export default {
+   port: process.env.PORT || "3000",
+   hostname: process.env.HOST || "localhost",
+@@ -41,8 +62,8 @@ export default {
+     const file = Bun.file(
+       resolve(__dirname, "./build/client/", `.${pathname}`)
+     );
+-    if (await file.exists()) return new Response(file);
++    if (await file.exists()) return rewriteAppUrl(new Response(file));
+     // Only if a file doesn't exists we send the request to the Remix request handler
+-    return remix(request);
++    return rewriteAppUrl(await remix(request));
+   }
+ } satisfies Serve;

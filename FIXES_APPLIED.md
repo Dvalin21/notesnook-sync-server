@@ -21,8 +21,8 @@ Upstream: streetwriters/notesnook-sync-server (no Caddy, `:latest` tags).
 | `dvalin21/notesnook-sync` | upstream sync | MongoDB driver 2.22→3.2.1 (Mongo 8 wire), caller bearer forwarded to identity, missing `await` in users path, WAMP middleware ordering, static `HttpClient` in S3 path, `MongoDbSettings__*` env support |
 | `dvalin21/notesnook-identity` | upstream identity | `profile` scope for Notesnook 3.x OIDC, GPG persisted via keystore volume + entrypoint, `X-Forwarded-Host`/template reformat, working password change/reset/delete, fail-closed login (no auto-create) |
 | `dvalin21/notesnook-sse` | upstream sse | WAMP removed (.NET 9 incompatible), session-clear notify best-effort |
-| `dvalin21/notesnook-monograph` | upstream monograph 1.3.1 (same monorepo pin as web image) | `NOTESNOOK_APP_URL` build arg replaces hardcoded `app.notesnook.com` in header/footer/landing "Publish a note" links; `NOTESNOOK_APP_HOST` env is ignored by upstream and stays a no-op |
-| `dvalin21/notesnook-web` | upstream web @ same pin | `NN_API/AUTH/SSE/MONOGRAPH_HOST` baked at build so clients default to self-hosted |
+| `dvalin21/notesnook-monograph` | upstream monograph 1.3.1 (same monorepo pin as web image) | Placeholder `app.example.com` baked in; `server.ts` rewrites it to `$NOTESNOOK_APP_HOST` per request — no real domain in the image. Image carries no `NOTESNOOK_APP_HOST` default (upstream ignores that env). |
+| `dvalin21/notesnook-web` | upstream web @ same pin | `NN_API/AUTH/SSE/MONOGRAPH_HOST` baked as `example.com` placeholders; `web/entrypoint.sh` swaps operator URLs at boot. Connectivity check hits configured API; sourcemaps stripped. |
 | `dvalin21/notesnook-cors-proxy` | `./cors-proxy` source | Preflight fix, logging cleanup |
 | `dvalin21/minio-notesnook` | minio | Pinned rebuild (no source fork) |
 
