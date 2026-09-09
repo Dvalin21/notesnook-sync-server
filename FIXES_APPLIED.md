@@ -22,7 +22,7 @@ Upstream: streetwriters/notesnook-sync-server (no Caddy, `:latest` tags).
 | `dvalin21/notesnook-identity` | upstream identity | `profile` scope for Notesnook 3.x OIDC, GPG persisted via keystore volume + entrypoint, `X-Forwarded-Host`/template reformat, working password change/reset/delete, fail-closed login (no auto-create), LocalApi auth restored on MFA controller (recovery codes) |
 | `dvalin21/notesnook-sse` | upstream sse | WAMP removed (.NET 9 incompatible), session-clear notify best-effort |
 | `dvalin21/notesnook-monograph` | upstream monograph 1.3.1 (same monorepo pin as web image) | Placeholder `app.example.com` baked in; `server.ts` rewrites it to `$NOTESNOOK_APP_HOST` per request — no real domain in the image. Image carries no `NOTESNOOK_APP_HOST` default (upstream ignores that env). |
-| `dvalin21/notesnook-web` | upstream web @ same pin | `NN_API/AUTH/SSE/MONOGRAPH_HOST` baked as `example.com` placeholders; `web/entrypoint.sh` swaps operator URLs at boot. Connectivity check hits configured API; sourcemaps stripped. |
+| `dvalin21/notesnook-web` | upstream web @ same pin | `NN_API/AUTH/SSE/MONOGRAPH_HOST` baked as `example.com` placeholders; `web/entrypoint.sh` swaps operator URLs at boot. Connectivity check hits configured API; sourcemaps stripped. Recipe + `nginx.conf` adapted from [BeardedTek/notesnook-docker](https://github.com/BeardedTek/notesnook-docker) (AGPL-3.0) — his stack also proved the reference for the Mongo 7.0.12 diagnosis. |
 | `dvalin21/notesnook-cors-proxy` | `./cors-proxy` source | Preflight fix, logging cleanup |
 | `dvalin21/minio-notesnook` | minio | Pinned rebuild (no source fork) |
 
