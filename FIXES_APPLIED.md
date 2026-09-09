@@ -50,7 +50,7 @@ Upstream: streetwriters/notesnook-sync-server (no Caddy, `:latest` tags).
 
 | Image | Tag | Reason |
 |---|---|---|
-| mongo | 7.0.12 | Runtime pin in compose (8.x upgrade needs FCV migration + deploy test) |
+| mongo | 8.0.29 | Upgraded 7.0.12→8.0 (consecutive major; FCV stepped post-boot) |
 | minio/minio | `RELEASE.2025-09-07T16-13-09Z` | Immutable timestamp tag |
 | minio/mc | `RELEASE.2025-08-13T08-35-41Z` | Bucket setup tool (one-shot) |
 | dvalin21/notesnook-sync | `latest` + dated | Custom build (see table above) |

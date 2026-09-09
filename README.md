@@ -77,11 +77,10 @@ Email change, authenticator-app MFA enrollment,
 multipart (>5MB) uploads, quota, refresh past 1h.
 
 ### MongoDB
-This stack runs `dvalin21/notesnook-db:7.0.12` (single-node rs0). App images
+This stack runs `mongo:8.0.29` (single-node rs0, FCV 8.0). App images
 use MongoDB .NET driver 3.2.1, which supports Server 8.x: the prod write
 path (user-row create) is proven against Server 8.0.29, and a separate
-8.0.29 stack has soaked healthy for days. Full account E2E was proven on
-7.0.12 — re-run the checklist after any major Mongo upgrade.
+8.0.29 stack has soaked healthy for days. Upgraded from 7.0.12 in Sep 2026 (consecutive-major upgrade 7.0→8.0, FCV stepped 7.0→8.0 post-boot).
 
 ### Ops notes
 - `SELF_HOSTED` must be `1` in `.env`. At `0` the signup path calls

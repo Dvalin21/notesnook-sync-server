@@ -221,7 +221,7 @@ services:
         | mongosh mongodb://localhost:27017 --quiet
       timeout: 30s
     hostname: notesnook-db
-    image: mongo:7.0.12
+    image: mongo:8.0.29
     networks:
     - notesnook
     volumes:
@@ -336,7 +336,7 @@ services:
     depends_on:
       notesnook-db:
         condition: service_healthy
-    image: mongo:7.0.12
+    image: mongo:8.0.29
     networks:
     - notesnook
     profiles:
