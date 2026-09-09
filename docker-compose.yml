@@ -344,6 +344,7 @@ services:
     restart: 'no'
     volumes:
     - ./backup.sh:/backup.sh:ro
+    - ./.env:/envfile:ro
     - ./backups:/backups
     - dbdata:/vol/dbdata:ro
     - dpdata-identity:/vol/dpdata-identity:ro
