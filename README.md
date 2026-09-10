@@ -52,8 +52,10 @@ cross-device note sync → image attachments (upload, render, across
 relogin) → monograph publish/view. 14/14 infrastructure checks green.
 
 ### Works
+- Fresh clone → `.env` → `up -d`: boots healthy, signup works (wipe-tested Sep 9)
 - Account lifecycle: signup, confirm link, email-MFA login, profile, tokens
 - Notes sync both directions across devices; attachment blobs in MinIO
+- Attachments >5MB in a single note (Sep 9)
 - Real-mailbox delivery (confirmation + 2FA via prod SMTP)
 - Rate limiting (6 MFA sends/min/user, fails fast over limit)
 - Password change + reset via recovery mail; session revocation
@@ -74,7 +76,7 @@ relogin) → monograph publish/view. 14/14 infrastructure checks green.
 
 ### Not yet tested
 Email change, authenticator-app MFA enrollment,
-multipart (>5MB) uploads, quota, refresh past 1h.
+quota, refresh past 1h.
 
 ### MongoDB
 This stack runs `mongo:8.0.30` (single-node rs0, FCV 8.0). App images
