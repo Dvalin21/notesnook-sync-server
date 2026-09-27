@@ -34,6 +34,11 @@
     @app host app.{$DOMAIN}
 
     handle @sync {
+        # Bound the upload body. Without this an authenticated client can POST
+        # an arbitrarily large body to /s3 and the server will try to buffer it.
+        request_body {
+            max_size 100MB
+        }
         reverse_proxy notesnook-server:5264 {
             header_up X-Forwarded-Host {http.request.host}
         }
@@ -54,6 +59,11 @@
         }
     }
     handle @attach {
+        # Same cap as the sync route: presigned multipart parts PUT straight
+        # here, so an unbounded body is reachable without touching /s3.
+        request_body {
+            max_size 100MB
+        }
         # ponytail: browser CORS is answered here, not MinIO (its bucket
         # CORS API is unimplemented in this build). Web UI origin only.
         @attach_preflight method OPTIONS
