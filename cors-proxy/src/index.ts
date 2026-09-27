@@ -10,6 +10,19 @@ const ALLOWED_ORIGINS = (Bun.env.ALLOWED_ORIGINS?.split(",") || ["*"])
 const MAX_REDIRECTS = 5;
 const MAX_RESPONSE_SIZE = 50 * 1024 * 1024; // 50MB
 const PROXY_TIMEOUT_MS = 30000; // 30 seconds
+// This service exists so the Notesnook app can render external IMAGES in a
+// note. Refusing every other content type is the control that makes an
+// unauthenticated public proxy acceptable. (SVG is safe in an <img>: scripts
+// do not execute in image context.)
+const ALLOWED_IMAGE_TYPES = new Set([
+  "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp",
+  "image/avif", "image/bmp", "image/x-icon", "image/vnd.microsoft.icon",
+  "image/svg+xml", "image/heic", "image/heif",
+]);
+// Per-client rate limit. Without it this is a free bandwidth relay on your IP.
+const RATE_LIMIT = Number(Bun.env.RATE_LIMIT ?? 60);
+const RATE_WINDOW_MS = Number(Bun.env.RATE_WINDOW_MS ?? 60_000);
+const rateBuckets = new Map<string, { n: number; reset: number }>();
 const ALLOWED_DOMAINS = (Bun.env.ALLOWED_DOMAINS?.split(",") || [])
   .map(s => s.trim()).filter(s => s.length > 0);
 
@@ -97,17 +110,29 @@ function normalizeHostname(hostname: string): string | null {
 
 // Resolve a hostname and reject when any address is private. String-only
 // checks lose to DNS rebinding (name clean at validation, dirty at fetch).
+//
+// ponytail: the original asked for `Bun.dnsLookup`, which does not exist in
+// Bun 1.3.5 (verified: it is `Bun.dns.lookup`) and it returned true whenever
+// the property was missing -- so this guard has never once run. It matters
+// more than it looks: the string checks below cannot see a docker-network name
+// like "notesnook-s3", only its resolved 172.18.x address. With ALLOWED_DOMAINS
+// unset that was an open path to internal services.
+// Both resolvers are PROMISE-based; the node:dns callback form never fires
+// under Bun and silently hangs the request.
 async function resolvedIPsArePublic(hostname: string): Promise<boolean> {
-  const lookup = (Bun as any).dnsLookup;
-  if (typeof lookup !== "function") return true;
-  let raw: any;
+  let list: Array<{ address?: string }>;
   try {
-    raw = await lookup(hostname);
+    const dns: any = (Bun as any).dns;
+    list =
+      dns && typeof dns.lookup === "function"
+        ? await dns.lookup(hostname)
+        : await (await import("node:dns/promises")).lookup(hostname, {
+            all: true,
+          });
   } catch {
-    return false;
+    return false; // unresolvable => cannot be a reachable public image host
   }
-  const list: any[] = Array.isArray(raw) ? raw : [raw];
-  if (list.length === 0) return false;
+  if (!Array.isArray(list) || list.length === 0) return false;
   for (const entry of list) {
     const ip = String(entry?.address ?? entry);
     const norm = normalizeHostname(ip);
@@ -184,9 +209,11 @@ async function proxyRequest(
     const responseHeaders = new Headers(corsHeaders);
 
     // Forward important headers (but NOT content-encoding since fetch auto-decompresses)
+    // content-length is deliberately absent: fetch auto-decompresses, so the
+    // upstream value describes the COMPRESSED size. Forwarding it with a
+    // decompressed body truncates the image in the browser.
     const headersToForward = [
       "content-type",
-      "content-length",
       "cache-control",
       "etag",
       "last-modified",
@@ -222,34 +249,44 @@ async function proxyRequest(
       });
     }
 
-    // Stream with size limit
-    const reader = response.body?.getReader();
-    if (!reader) {
+    // Content-type gate -- before a single byte is forwarded to the client.
+    const ctype = (response.headers.get("content-type") ?? "")
+      .split(";")[0]!.trim().toLowerCase();
+    if (!ALLOWED_IMAGE_TYPES.has(ctype)) {
+      logRequest("GET", targetUrl, 403);
+      return new Response("Not an image", {
+        status: 403,
+        headers: corsHeaders,
+      });
+    }
+
+    if (!response.body) {
       return new Response("No response body", {
         status: 502,
         headers: corsHeaders,
       });
     }
 
+    // Stream with a byte cap instead of buffering. Buffering up to
+    // MAX_RESPONSE_SIZE inside a 128M container was a self-DoS: one 50MB
+    // response OOM-killed the service, and it had no restart policy.
+    // pipeThrough gives backpressure, so memory stays flat as bodies grow.
+    // The cap is a backstop for a lying/absent content-length; it truncates
+    // the stream rather than returning 413, which is the correct trade when
+    // headers are already on the wire.
     let totalBytes = 0;
-    const chunks: Uint8Array[] = [];
+    const cap = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        totalBytes += chunk.byteLength;
+        if (totalBytes > MAX_RESPONSE_SIZE) {
+          controller.error(new Error("response too large"));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    });
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.length;
-      if (totalBytes > MAX_RESPONSE_SIZE) {
-        reader.releaseLock();
-        return new Response("Response too large", {
-          status: 413,
-          headers: corsHeaders,
-        });
-      }
-      chunks.push(value);
-    }
-
-    const body = new Blob(chunks);
-    return new Response(body, {
+    return new Response(response.body.pipeThrough(cap), {
       status: response.status,
       statusText: response.statusText,
       headers: responseHeaders,
@@ -272,7 +309,7 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
 
-    // Health check endpoint
+    // Health check endpoint (never rate limited -- the healthcheck polls it)
     if (url.pathname === "/health") {
       logRequest(req.method, url.pathname, 200);
       return new Response("OK", {
@@ -295,6 +332,24 @@ const server = Bun.serve({
         status: 405,
         headers: corsHeaders,
       });
+    }
+
+    // Per-client rate limit. Caddy is the only thing that can reach this
+    // container in normal operation, so X-Forwarded-For is trustworthy here.
+    const ip = (req.headers.get("x-forwarded-for") ?? "local").split(",")[0]!.trim();
+    const now = Date.now();
+    const b = rateBuckets.get(ip);
+    if (!b || now > b.reset) {
+      rateBuckets.set(ip, { n: 1, reset: now + RATE_WINDOW_MS });
+    } else if (++b.n > RATE_LIMIT) {
+      return new Response("Rate limit exceeded", {
+        status: 429,
+        headers: { ...corsHeaders, "Retry-After": String(Math.ceil((b.reset - now) / 1000)) },
+      });
+    }
+    // Bound the map so a spray of spoofed XFF values cannot grow it forever.
+    if (rateBuckets.size > 4096) {
+      for (const [k, v] of rateBuckets) if (now > v.reset) rateBuckets.delete(k);
     }
 
     // Root endpoint with usage info
