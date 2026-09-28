@@ -46,8 +46,8 @@ AUTH_RESP=$(curl -s -X POST "$CADDY/connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password" \
   -d "client_id=notesnook" \
-  -d "username=noreply@example.invalid" \
-  -d "password=changeme" \
+  -d "username=probe@example.invalid" \
+  -d "password=not-a-real-password" \
   -d "scope=notesnook.sync openid offline_access" 2>/dev/null || true)
 
 if echo "$AUTH_RESP" | grep -q '"access_token"'; then
