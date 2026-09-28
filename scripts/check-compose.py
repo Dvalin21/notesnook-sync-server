@@ -14,7 +14,14 @@ itself. These are the invariants that were violated in the wild:
 import subprocess
 import sys
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError:
+    sys.exit(
+        "check-compose.py needs PyYAML.\n"
+        "  Debian/Ubuntu: apt-get install -y python3-yaml\n"
+        "  pip:           pip install pyyaml"
+    )
 
 
 def load() -> dict:
