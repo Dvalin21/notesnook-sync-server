@@ -316,13 +316,19 @@ services:
 
   notesnook-server:
     <<: *svc
+    # The `attachments` bucket is created by scripts/create-minio-app-user.sh,
+    # which an operator must run before compose will even parse (S3_ACCESS_KEY
+    # is a required interpolation). There used to be a `setup-s3` service here
+    # that re-created the bucket on every boot, but it depended on
+    # minio/mc:RELEASE.2025-08-13T08-35-41Z -- deleted from Docker Hub in
+    # October 2025 -- so it made a clean install impossible on any machine
+    # without that image cached, and `mc mb ... || true` swallowed the failure
+    # so a missing bucket still produced a green stack.
     depends_on:
       identity-server:
         condition: service_healthy
       notesnook-s3:
         condition: service_healthy
-      setup-s3:
-        condition: service_completed_successfully
     deploy:
       resources:
         limits:
@@ -364,27 +370,6 @@ services:
     image: dvalin21/notesnook-sync:latest
     volumes:
     - dpdata-notesnook:/app/.aspnet/DataProtection-Keys
-
-  setup-s3:
-    <<: *svc
-    restart: "no"
-    command:
-    - -c
-    - |
-      if [ -z "$$MINIO_ROOT_USER" ] || [ -z "$$MINIO_ROOT_PASSWORD" ]; then
-        echo "ERROR: MINIO_ROOT_USER and MINIO_ROOT_PASSWORD must be set" >&2
-        exit 1
-      fi
-      until mc alias set minio http://notesnook-s3:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
-        sleep 1
-      done
-      mc mb minio/attachments -p || true
-    depends_on:
-      notesnook-s3:
-        condition: service_healthy
-    entrypoint: /bin/sh
-    env_file: *envfile
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
 
   backup:
     <<: *svc

@@ -35,11 +35,11 @@ Your external proxy terminates TLS.
 5. `init-dpdata` one-shot container fixes volume permissions automatically on first boot.
 6. MongoDB is NOT exposed on a host port.
 7. Healthchecks exercise the real app: `wget` against `/health` for the .NET services and Caddy, `node` for cors-proxy, `bun` for monograph and inbox. A TCP port check (`nc -z`) is *not* used — it passes the instant the socket binds, before the app has resolved Mongo or read its config, so a broken service reports healthy and the proxy routes live traffic into it.
-8. App services run custom images (`dvalin21/notesnook-sync`, `-identity`, `-sse`, `-monograph`, `-web`, all `:latest` = verified build); upstream inbox/themes; infra: `caddy:alpine`, `alpine:latest`, `vandot/alpine-bash`, `minio/mc:RELEASE.2025-08-13T08-35-41Z`. Monograph bakes `NOTESNOOK_APP_URL` so Publish links point at your app, not official SaaS.
+8. App services run custom images (`dvalin21/notesnook-sync`, `-identity`, `-sse`, `-monograph`, `-web`, all `:latest` = verified build); upstream inbox/themes; infra: `caddy:alpine`, `alpine:latest`, `vandot/alpine-bash`. Monograph bakes `NOTESNOOK_APP_URL` so Publish links point at your app, not official SaaS.
 9. Every service has `restart: unless-stopped` and JSON log rotation (`10m` × `3`). Applied through a merged `x-svc` anchor so they hold by construction. `willfarrell/autoheal` was **removed**: it mounted `/var/run/docker.sock` (root on the host) on `:latest`, and existed only to compensate for missing restart policies.
-9. `setup-s3` fails fast if `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` are missing.
+9. `scripts/create-minio-app-user.sh` fails fast if `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` are missing, and creates the `attachments` bucket, the scoped policy and the service account.
 10. Caddy internal reverse proxy routes all traffic through a single port (8080).
-11. MinIO runs custom `dvalin21/minio-notesnook:latest` (console on :9090); mc pinned to `RELEASE.2025-08-13T08-35-41Z` for setup-s3.
+11. MinIO runs custom `dvalin21/minio-notesnook:latest` (console on :9090). The MinIO client is `dvalin21/mc:latest`, compiled from a pinned upstream commit (see `mc/Dockerfile`) because MinIO deleted `minio/mc` from Docker Hub in October 2025.
 12. MongoDB is `8.0.30` (single-node rs0) from the official `mongo` image; .NET driver 3.2.1 is Server-8.x-ready (see Verified status). There is no `dvalin21/notesnook-db` image — it was an unused duplicate of the official Mongo image and has been removed.
 13. `cors-proxy` is gated: images only (content-type allowlist), a per-client rate limit, and a domain allowlist. It is an internet-facing fetch proxy, so an open one is a liability. See [CORS proxy](#cors-proxy-corsdomain).
 14. Uploads are bounded at the edge — `request_body max_size 100MB` on the sync and attach routes, so no client can buffer an unbounded body into the server.
@@ -173,7 +173,7 @@ internally on port 9000. Caddy routes `attach.example.com` to it.
 The MinIO admin console runs on port 9090 internally. Caddy can route
 `minio.example.com` to it for admin access — this is optional.
 
-`setup-s3` creates the `attachments` bucket automatically on first boot.
+`scripts/create-minio-app-user.sh` creates the `attachments` bucket, enables versioning on it, and provisions the bucket-scoped service account. Run it once before the first `docker compose up` — compose will not start without the `S3_ACCESS_KEY` / `S3_ACCESS_KEY_ID` values it prints.
 
 #### ⚠️ MinIO is archived and has unpatched CVEs
 
@@ -353,8 +353,8 @@ Every `CHANGEME-*` value must be replaced. Here is every field explained:
 | `MONOGRAPH_PUBLIC_URL` | Yes — required by `validate` service + monograph container | `https://notes.example.com` |
 | `ATTACHMENTS_SERVER_PUBLIC_URL` | Yes — required by `validate` service | `https://attach.example.com` |
 | `NOTESNOOK_APP_HOST` | Yes — required by `validate` service | Web client origin for recovery/verified links, `https://app.example.com` (NOT the sync URL) |
-| `MINIO_ROOT_USER` | No — but `setup-s3` will fail if empty | Generate with `openssl rand -base64 12`. Not checked by `validate`; `setup-s3` refuses to start if blank. |
-| `MINIO_ROOT_PASSWORD` | No — but `setup-s3` will fail if empty | Generate with `openssl rand -base64 22`. Not checked by `validate`; `setup-s3` refuses to start if blank. |
+| `MINIO_ROOT_USER` | No — but `create-minio-app-user.sh` will fail if empty | Generate with `openssl rand -base64 12`. Not checked by `validate`; the script refuses to run if blank. |
+| `MINIO_ROOT_PASSWORD` | No — but `create-minio-app-user.sh` will fail if empty | Generate with `openssl rand -base64 22`. Not checked by `validate`; the script refuses to run if blank. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | No — optional, warn if missing | Leave blank if not using email features |
 | `NOTESNOOK_CORS_ORIGINS` | No — used by `cors-proxy` only | Comma-separated origins, default `*`. Not checked by `validate`; the `cors-proxy` container receives it via env_file. |
 || `TWILIO_*` | No — optional, passed to all services | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SERVICE_SID` for SMS 2FA via `SMSSender`. Leave empty to disable SMS 2FA. |
@@ -363,7 +363,7 @@ Every `CHANGEME-*` value must be replaced. Here is every field explained:
 || `THEMES_REPO_URL` | No — optional, used by themes-server container only | Git clone URL for the themes repository. The themes-server clones this on startup and serves theme metadata from it. Default: upstream `streetwriters/notesnook-themes.git`. Change only if you host your own theme repo. |
 
 **MinIO credentials warning:** If `MINIO_ROOT_USER` or `MINIO_ROOT_PASSWORD` is empty,
-the `setup-s3` container will refuse to start. Generate strong values.
+`scripts/create-minio-app-user.sh` will refuse to run. Generate strong values.
 
 ### 3. Configure your TLS reverse proxy
 
@@ -461,15 +461,14 @@ What you should see in order:
 2. **`init-dpdata`** exits with `Setting DataProtection volume permissions... Done.`
 3. **`notesnook-db`** starts MongoDB and initiates a replica set
 4. **`notesnook-s3`** starts MinIO S3 storage
-5. **`setup-s3`** creates the `attachments` bucket, then exits
-6. **`identity-server`** starts on port 8264
-7. **`notesnook-server`** starts on port 5264
-8. **`sse-server`** starts on port 7264
-9. **`monograph-server`** starts on port 3000
-10. **`cors-proxy`** starts on port 3000
-11. **`inbox-api`** starts on port 5181 (optional — set `INBOX_API_PUBLIC_URL` to enable)
-12. **`themes-server`** starts on port 9000 (optional — set `THEMES_SERVER_PUBLIC_URL` to enable)
-13. **`caddy`** starts routing on port 80 (mapped to host port 8080)
+5. **`identity-server`** starts on port 8264
+6. **`notesnook-server`** starts on port 5264
+7. **`sse-server`** starts on port 7264
+8. **`monograph-server`** starts on port 3000
+9. **`cors-proxy`** starts on port 3000
+10. **`inbox-api`** starts on port 5181 (optional — set `INBOX_API_PUBLIC_URL` to enable)
+11. **`themes-server`** starts on port 9000 (optional — set `THEMES_SERVER_PUBLIC_URL` to enable)
+12. **`caddy`** starts routing on port 80 (mapped to host port 8080)
 
 **First boot takes 2-5 minutes.** MongoDB replica set initialization and
 .NET DataProtection key generation happen on first startup.
@@ -705,7 +704,7 @@ docker compose --profile backup run --rm backup
 source .env
 docker run --rm --network notesnook-sync-server_notesnook \
   -e MC_HOST_src=http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@notesnook-s3:9000 \
-  -v /backup/s3:/dest minio/mc:RELEASE.2025-08-13T08-35-41Z \
+  -v /backup/s3:/dest dvalin21/mc:latest \
   mirror --overwrite src/attachments /dest
 
 # 3. Per-user client exports (web UI → Backup). Ultimate parachute: restores notes

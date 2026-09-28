@@ -12,8 +12,8 @@
 # the attachments bucket, and it was not recoverable from any backup.)
 #
 # Usage:  bash scripts/create-minio-app-user.sh
-# Requires: the stack's .env (for MINIO_ROOT_USER / MINIO_ROOT_PASSWORD) and
-#           a running notesnook-s3.
+# Requires: the stack's .env (for MINIO_ROOT_USER / MINIO_ROOT_PASSWORD).
+#           Starts notesnook-s3 if it is not already up, and waits for it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,11 +21,39 @@ cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
 : "${MINIO_ROOT_USER:?not in .env}" "${MINIO_ROOT_PASSWORD:?not in .env}"
 
-NET=$(docker inspect notesnook-sync-server-notesnook-s3-1 \
-      --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null || true)
-[ -n "$NET" ] || { echo "notesnook-s3 is not running" >&2; exit 1; }
-MC_IMG=${MC_IMG:-minio/mc:RELEASE.2025-08-13T08-35-41Z}
+# MinIO deleted minio/mc from Docker Hub in October 2025, so this image is
+# compiled from a pinned upstream commit by mc/Dockerfile via the `mc` entry in
+# publish.yml. The pin that matters is MC_COMMIT in that Dockerfile: this mc
+# revision defines `mb -p` as --ignore-existing, which the line below needs.
+MC_IMG=${MC_IMG:-dvalin21/mc:latest}
 BUCKET=${S3_BUCKET_NAME:-attachments}
+
+# The compose project name prefixes the container name. COMPOSE_PROJECT_NAME is
+# optional, so fall back to upstream's default rather than hardcoding it.
+PROJ=${COMPOSE_PROJECT_NAME:-notesnook-sync-server}
+S3_CTR="${PROJ}-notesnook-s3-1"
+
+# Wait for MinIO instead of failing instantly. This script used to be preceded
+# by a `setup-s3` compose service that had an `until mc alias set` retry loop;
+# that service is gone (it needed minio/mc, deleted from Docker Hub in October
+# 2025), so the wait moves here where the bucket is actually created.
+printf 'waiting for %s to become healthy' "$S3_CTR"
+for _ in $(seq 1 60); do
+  state=$(docker inspect "$S3_CTR" --format '{{.State.Status}}' 2>/dev/null || echo missing)
+  if [ "$state" = "running" ]; then
+    health=$(docker inspect "$S3_CTR" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || echo none)
+    case "$health" in
+      healthy|none) echo " ok"; break ;;
+    esac
+  fi
+  printf '.'
+  sleep 2
+done
+echo
+
+NET=$(docker inspect "$S3_CTR" \
+      --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' 2>/dev/null || true)
+[ -n "$NET" ] || { echo "notesnook-s3 is not running: $S3_CTR" >&2; exit 1; }
 mc(){ docker run --rm --network "$NET" -v "$POLICY:/policy.json:ro" \
         -e MC_HOST_s="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@notesnook-s3:9000" \
         "$MC_IMG" "$@"; }
@@ -52,11 +80,17 @@ cat > "$POLICY" <<POL
 POL
 trap 'rm -f "$POLICY"' EXIT
 
-echo "==> ensuring the bucket exists and is versioned"
-# `mc mb --ignore-existing` in mc RELEASE.2025-08-13 prints a spurious
-# "Bucket name cannot be empty" to stderr AND exits non-zero even when it
-# creates the bucket, which trips `set -e`. Same `|| true` shape setup-s3 uses.
-mc mb -p s "$BUCKET" >/dev/null 2>&1 || true
+  echo "==> ensuring the bucket exists and is versioned"
+  # The target is a path and -p is --ignore-existing, so the flag goes last.
+  # This mc prints to stderr and can exit non-zero; `set -e` would abort the
+  # script there, so the exit code is discarded and the `mc ls` check below is
+  # what actually decides whether the bucket exists.
+  # `mc mb` takes the target as a PATH, and the flag goes after it. Writing
+  # `mc mb -p "$BUCKET"` instead looks equivalent and is not: with the flag
+  # first, this mc revision reports "Bucket name cannot be empty" and creates
+  # nothing. That is why the `|| true` below is load-bearing -- but on its own
+  # it also hid the failure until the `mc ls` check one line later.
+  mc mb "s/$BUCKET" -p >/dev/null 2>&1 || true
 mc ls "s/$BUCKET" >/dev/null 2>&1 || { echo "bucket $BUCKET is not there" >&2; exit 1; }
 mc version enable "s/$BUCKET" >/dev/null 2>&1 || true
 

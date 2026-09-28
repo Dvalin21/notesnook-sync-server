@@ -52,9 +52,16 @@ jobs:
               NN_AUTH_HOST=https://auth.example.com
               NN_SSE_HOST=https://sse.example.com
               NN_MONOGRAPH_HOST=https://notes.example.com
-          - image: notesnook-monograph
-            file: ./monograph/Dockerfile
-            context: ./monograph/
+            - image: notesnook-monograph
+              file: ./monograph/Dockerfile
+              context: ./monograph/
+            # MinIO deleted minio/mc from Docker Hub in October 2025, so this is
+            # compiled from a pinned upstream commit. It is what
+            # scripts/create-minio-app-user.sh uses to create the attachments
+            # bucket and the bucket-scoped service account.
+            - image: mc
+              file: ./mc/Dockerfile
+              context: ./mc/
     steps:
       # Actions are pinned by SHA. A tag can be repointed at new code without a
       # review, and this workflow holds a Docker Hub credential.

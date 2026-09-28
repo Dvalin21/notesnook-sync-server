@@ -84,9 +84,16 @@ for svc in notesnook-db notesnook-s3 identity-server notesnook-server sse-server
     && pass "service $svc running" \
     || fail "service $svc missing"
 done
+# setup-s3 was removed: it needed minio/mc, which MinIO deleted from Docker Hub
+# in October 2025, and its `mc mb ... || true` hid a missing bucket behind a
+# green stack. create-minio-app-user.sh now creates the bucket, and waits for
+# notesnook-s3 itself.
 $COMPOSE config --services 2>/dev/null | tr -d '\r' | grep -q '^setup-s3$' \
-  && pass "service setup-s3 present in compose" \
-  || fail "service setup-s3 missing from compose config"
+  && fail "setup-s3 is back — it depends on the deleted minio/mc image" \
+  || pass "setup-s3 absent (bucket creation moved to create-minio-app-user.sh)"
+$COMPOSE config 2>/dev/null | grep -q 'minio/mc:' \
+  && fail "compose still references minio/mc — deleted from Docker Hub" \
+  || pass "compose references no deleted minio/* image"
 
 $COMPOSE ps --format '{{.Name}} {{.Ports}}' 2>/dev/null \
   | grep 'notesnook-db' | grep -E '0\.0\.0\.0:|\[::\]:' | grep ':27017' \
