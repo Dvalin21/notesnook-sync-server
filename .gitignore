@@ -274,3 +274,8 @@ keystore/
 Notesnook.API/sync/HANDOFF.md
 HANDOFF.md
 backups/
+
+# Mongo replica-set keyfile and generated credentials. The keyfile is what
+# mongod uses for internal member auth once --auth is on; committing it would
+# hand anyone who clones the ability to join the replica set.
+.secrets/

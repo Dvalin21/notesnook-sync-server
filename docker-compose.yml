@@ -129,9 +129,9 @@ services:
     environment:
       <<: *app-env
       ASPNETCORE_ENVIRONMENT: Production
-      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/identity?replSet=rs0
+      MONGODB_CONNECTION_STRING: mongodb://${MONGO_USER}:${MONGO_PASS}@notesnook-db:27017/identity?replSet=rs0&authSource=admin
       MONGODB_DATABASE_NAME: identity
-      MongoDbSettings__ConnectionString: mongodb://notesnook-db:27017/identity?replicaSet=rs0&tls=false&directConnection=true
+      MongoDbSettings__ConnectionString: mongodb://${MONGO_USER}:${MONGO_PASS}@notesnook-db:27017/identity?replicaSet=rs0&tls=false&directConnection=true&authSource=admin
       MongoDbSettings__DatabaseName: identity
     # ponytail: was `nc -z 8264`, which passes the moment the socket binds --
     # before the app has resolved Mongo or read its config. A broken service
@@ -236,13 +236,28 @@ services:
 
   notesnook-db:
     <<: *svc
-    command: --replSet rs0 --bind_ip_all
+    # --auth REQUIRES --keyFile when authorization is enabled on a replica set,
+    # even single-node. Verified: mongod exits with
+    #   BadValue: security.keyFile is required when authorization is enabled
+    #   with replica sets
+    command: --replSet rs0 --bind_ip_all --auth --keyFile /run/secrets/mongo-keyfile
     depends_on:
       validate:
         condition: service_completed_successfully
+    # Only the two Mongo vars are injected, not the whole .env: mongod has no
+    # business seeing MINIO_ROOT_PASSWORD or the SMTP password.
+    environment:
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASS: ${MONGO_PASS}
     healthcheck:
-      test: echo 'try { rs.status() } catch (err) { rs.initiate() }; db.runCommand("ping").ok'
-        | mongosh mongodb://localhost:27017 --quiet
+      # Must authenticate. Mongo's unauthenticated localhost exception is
+      # DISABLED as soon as the first user exists -- and we just created one --
+      # so the previous credential-less probe would fail and put the database
+      # into a restart loop.
+      test:
+      - CMD-SHELL
+      - mongosh "mongodb://$$MONGO_USER:$$MONGO_PASS@localhost:27017/admin?authSource=admin"
+        --quiet --eval 'try { rs.status() } catch (err) { rs.initiate() }; db.runCommand("ping").ok'
       interval: 40s
       timeout: 30s
       retries: 5
@@ -251,6 +266,7 @@ services:
     image: mongo:8.0.30
     volumes:
     - dbdata:/data/db
+    - ./.secrets/mongo-keyfile:/run/secrets/mongo-keyfile:ro
 
   notesnook-s3:
     <<: *svc
@@ -308,7 +324,7 @@ services:
     environment:
       <<: *app-env
       ASPNETCORE_HTTP_PORTS: '5264'
-      MONGODB_CONNECTION_STRING: mongodb://notesnook-db:27017/?replSet=rs0
+      MONGODB_CONNECTION_STRING: mongodb://${MONGO_USER}:${MONGO_PASS}@notesnook-db:27017/?replSet=rs0&authSource=admin
       MONGODB_DATABASE_NAME: notesnook
       S3_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
@@ -361,6 +377,13 @@ services:
     depends_on:
       notesnook-db:
         condition: service_healthy
+    # backup.sh needs the Mongo credentials to take its fsyncLock, but this
+    # service has no env_file (it mounts .env as a FILE to copy into the dump).
+    # Inject only the two variables it needs rather than the whole .env, so the
+    # MinIO root password and SMTP password are not handed to this container.
+    environment:
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASS: ${MONGO_PASS}
     image: mongo:8.0.30
     profiles:
     - backup
@@ -490,6 +513,8 @@ services:
         "SSE_SERVER_PUBLIC_URL"
         "MINIO_ROOT_USER"
         "MINIO_ROOT_PASSWORD"
+        "MONGO_USER"
+        "MONGO_PASS"
       )
       # SELF_HOSTED=0 sends signup at cloud endpoints that cannot work here and
       # the request then hangs until the proxy times out. Fail at boot instead.

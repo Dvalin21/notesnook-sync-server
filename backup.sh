@@ -16,7 +16,11 @@
 set -eu
 STAMP=${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
 OUT=${OUT:-/backups/$STAMP}
-MONGO=${MONGO:-mongodb://notesnook-db:27017}
+# Auth is enabled on mongod, and Mongo disables the unauthenticated localhost
+# exception as soon as the first user exists, so an unauthenticated URI is
+# refused outright. Credentials arrive via the two MONGO_* vars the compose
+# backup service injects; fail loudly rather than silently skipping.
+MONGO=${MONGO:-"mongodb://${MONGO_USER:?MONGO_USER not set}:${MONGO_PASS:?MONGO_PASS not set}@notesnook-db:27017/?authSource=admin"}
 # This tree gets .env, DataProtection keys and the GPG keyring. 077 so a failed
 # run can never leave world-readable credentials on disk.
 umask 077
