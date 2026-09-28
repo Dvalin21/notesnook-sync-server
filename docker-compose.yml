@@ -209,6 +209,41 @@ services:
     - dpdata-sse:/data/sse
     - keystore-data:/data/keystore
 
+  init-mongo-key:
+    <<: *svc
+    restart: "no"
+    # mongod runs as uid 999 in the official image and REJECTS a keyfile it does
+    # not own -- "error opening file: /run/secrets/mongo-keyfile: bad file".
+    # A host-side file bind-mounted in arrives owned by whoever ran the install,
+    # so the ownership could never be right, and nothing in the stack corrected
+    # it. Generating the keyfile here means it is created, owned and
+    # permissioned by the same rootful init service that already fixes the
+    # DataProtection volumes for uid 1000.
+    #
+    # head+base64 rather than openssl, so a fresh install needs no package
+    # download at boot. 756 random bytes -> 1008 base64 chars, inside MongoDB's
+    # 6-1024 limit, and base64 is the only character set it accepts.
+    entrypoint: /bin/sh
+    command:
+    - -c
+    - |
+      set -eu
+      if [ -s /key/mongo-keyfile ]; then
+        echo "  mongo keyfile already present, keeping it"
+      else
+        head -c 756 /dev/urandom | base64 | tr -d '\n' > /key/mongo-keyfile
+        echo "  generated a new replica-set keyfile"
+      fi
+      chown 999:999 /key/mongo-keyfile
+      chmod 400 /key/mongo-keyfile
+      ls -ln /key/mongo-keyfile | sed "s/^/  keyfile /"
+    depends_on:
+      validate:
+        condition: service_completed_successfully
+    image: alpine:3.21
+    volumes:
+    - mongo-keys:/key
+
   monograph-server:
     <<: *svc
     # Source rebuild (same placeholder image; domain arrives via
@@ -255,10 +290,25 @@ services:
     depends_on:
       validate:
         condition: service_completed_successfully
+      init-mongo-key:
+        condition: service_completed_successfully
     # Only the two Mongo vars are injected, not the whole .env: mongod has no
     # business seeing MINIO_ROOT_PASSWORD or the SMTP password.
     environment:
       MONGO_USER: ${MONGO_USER}
+      # What makes a FRESH install possible. With --auth on an empty volume there
+      # are zero users, and the healthcheck authenticates as MONGO_USER before it
+      # can run rs.initiate() -- so mongod never went healthy and
+      # notesnook-server / identity-server / sse-server never started. Nothing in
+      # the repository ever created that user; the running LXC only works
+      # because its dbdata volume already had one, created by hand.
+      #
+      # The official image's entrypoint performs the documented bootstrap itself
+      # on an empty /data/db: it starts a temporary auth-less mongod, creates
+      # this user, then starts the real one. No init container, no change to the
+      # start-up order, no change to the healthcheck.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS}
       MONGO_PASS: ${MONGO_PASS}
     healthcheck:
       # Must authenticate. Mongo's unauthenticated localhost exception is
@@ -277,7 +327,7 @@ services:
     image: mongo:8.0.30
     volumes:
     - dbdata:/data/db
-    - ./.secrets/mongo-keyfile:/run/secrets/mongo-keyfile:ro
+    - mongo-keys:/run/secrets:ro
 
   notesnook-s3:
     <<: *svc
@@ -539,6 +589,7 @@ services:
 
 volumes:
   dbdata: null
+  mongo-keys: null
   dpdata-identity: null
   dpdata-notesnook: null
   dpdata-sse: null
