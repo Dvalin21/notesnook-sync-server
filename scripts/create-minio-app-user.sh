@@ -28,10 +28,13 @@ set -a; . ./.env; set +a
 MC_IMG=${MC_IMG:-dvalin21/mc:latest}
 BUCKET=${S3_BUCKET_NAME:-attachments}
 
-# The compose project name prefixes the container name. COMPOSE_PROJECT_NAME is
-# optional, so fall back to upstream's default rather than hardcoding it.
-PROJ=${COMPOSE_PROJECT_NAME:-notesnook-sync-server}
-S3_CTR="${PROJ}-notesnook-s3-1"
+# Ask compose which container it is rather than reconstructing the name.
+# Compose prefixes container names with the project name, which it derives from
+# the working directory unless COMPOSE_PROJECT_NAME is set -- so a checkout in
+# ~/notesnook is "notesnook-notesnook-s3-1", not "...-notesnook-sync-server-...".
+# Guessing that string breaks every install outside the original directory name.
+S3_CTR=$(docker compose ps -q notesnook-s3 2>/dev/null | head -1)
+[ -n "$S3_CTR" ] || S3_CTR="${COMPOSE_PROJECT_NAME:-notesnook-sync-server}-notesnook-s3-1"
 
 # Wait for MinIO instead of failing instantly. This script used to be preceded
 # by a `setup-s3` compose service that had an `until mc alias set` retry loop;
