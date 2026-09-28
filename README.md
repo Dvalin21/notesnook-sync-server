@@ -175,6 +175,78 @@ The MinIO admin console runs on port 9090 internally. Caddy can route
 
 `setup-s3` creates the `attachments` bucket automatically on first boot.
 
+#### ⚠️ MinIO is archived and has unpatched CVEs
+
+**Read this before exposing `attach.<domain>` to the internet.**
+
+`minio/minio` was **archived on 2026-04-25** and is read-only. This stack runs
+the last open-source release, `RELEASE.2025-09-07T16-13-09Z`, and the advisories
+state plainly:
+
+> Affected Versions: All MinIO releases through the final release of the
+> minio/minio open-source project.
+> Patched versions: **None**
+
+The fix ships only in commercial **MinIO AIStor**. There is no upstream patch to
+apply to the open-source code, so this stack mitigates at the edge instead.
+
+**CVE-2026-40344 / GHSA-9c4q-hq6p-c237** (CVSS 8.8) and
+**CVE-2026-41145 / GHSA-hv4r-mvr4-25vw** — authentication bypass. Anyone holding
+**just a valid access key** can write arbitrary objects to any bucket, with no
+secret key and a fabricated signature. Confirmed present in this build's source:
+
+- `cmd/object-handlers.go` — `newUnsignedV4ChunkedReader(r, true, r.Header.Get(xhttp.Authorization) != "")`
+  gates signature verification on the *presence* of an `Authorization` header,
+  while `isPutActionAllowed` trusts credentials taken from the
+  `X-Amz-Credential` **query parameter**.
+- `PutObjectExtractHandler`'s switch has no `case authTypeStreamingUnsignedTrailer`,
+  so it falls through with zero signature verification.
+
+Both advisories name a reverse-proxy block as *the* mitigation, which is what
+the `Caddyfile` does:
+
+```
+@unsigned_trailer header X-Amz-Content-Sha256 STREAMING-UNSIGNED-PAYLOAD-TRAILER
+respond @unsigned_trailer 403
+```
+
+Clients using the **signed** trailer variant
+(`STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER`) are unaffected and still work.
+
+**Second half of the mitigation — stop leaking the access key.** Presigned S3 URLs
+carry `?X-Amz-Credential=<access key>`, and an access key alone is exactly what
+CVE-2026-40344 needs. Caddy was logging the full request URI, writing the MinIO
+access key to the access log on every attachment transfer. The `log` directive now
+redacts `X-Amz-Credential`, `X-Amz-Signature` and `X-Amz-Security-Token` while
+keeping every other query parameter, so `uploadId`/`partNumber` debugging survives.
+
+**Residual risk, stated plainly:** this is edge mitigation, not a fix. The
+vulnerable code is still in the binary. Anyone who obtains the access key by some
+other route is not protected by the `X-Amz-Content-Sha256` check alone. The only
+complete remedy is moving off MinIO Community Edition.
+
+**Not affected** (verified against the advisories): CVE-2026-33322 (OIDC — not
+enabled), GHSA-xh8f-g2qw-gcm7 (path traversal in `ReadMultiple` — "single-node
+standalone deployments do not register the route"), CVE-2023-28432 (cluster-only).
+
+#### Credentials
+
+The sync server currently authenticates to MinIO as **root**
+(`S3_ACCESS_KEY_ID=${MINIO_ROOT_USER}`). A bucket-scoped service account limited
+to `arn:aws:s3:::attachments/*` is preferable, but `mc admin user add` does not
+work against this MinIO build — the secret key never reaches the server:
+
+```
+PUT /minio/admin/v3/add-user?accessKey=abcdefghij
+-> XMinioAdminInvalidSecretKey: The secret key is invalid.
+   (secret key length should be between 8 and 40)
+```
+
+The supplied secret is 8–40 characters and `IsValidSecretKey()` only enforces
+`len >= 8`, so the request is well-formed and the rejection is a defect in this
+build. Do not assume the account was created — verify with
+`mc admin user info <alias> <key>` before relying on it.
+
 ### How attachments work
 
 The Notesnook server has **two** S3 clients — one internal, one external:

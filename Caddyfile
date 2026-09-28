@@ -11,10 +11,28 @@
 }
 
 :80 {
-    # ponytail: access log for per-request timing (blame split app-vs-server)
+    # ponytail: access log for per-request timing (blame split app-vs-server).
+    #
+    # The three S3 presigning parameters are redacted. Presigned URLs carry
+    # ?X-Amz-Credential=<access key> and ?X-Amz-Signature=<sig>, and Caddy
+    # logged the full URI -- so the MinIO access key was written to the access
+    # log on every attachment transfer. That is precisely the input
+    # CVE-2026-40344 needs: an access key ALONE permits unsigned object writes,
+    # with no secret key and a fabricated signature.
+    # Every other query parameter is kept, so uploadId/partNumber debugging
+    # still works. The query is still sent upstream; only the log is filtered.
     log {
         output stdout
-        format json
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    replace X-Amz-Credential REDACTED
+                    replace X-Amz-Signature REDACTED
+                    replace X-Amz-Security-Token REDACTED
+                }
+            }
+        }
     }
     # Caddy health
     handle /health {
@@ -59,6 +77,26 @@
         }
     }
     handle @attach {
+        # ── CVE-2026-40344 / CVE-2026-41145 mitigation ──────────────────────
+        # MinIO's STREAMING-UNSIGNED-PAYLOAD-TRAILER path verifies the
+        # signature only if an Authorization header is present, while
+        # isPutActionAllowed trusts credentials from the X-Amz-Credential
+        # QUERY parameter. An attacker holding just an access key can PUT
+        # arbitrary objects with no secret key and a fabricated signature.
+        # Confirmed present in the running build's source:
+        #   cmd/object-handlers.go: newUnsignedV4ChunkedReader(r, true,
+        #     r.Header.Get(xhttp.Authorization) != "")
+        #   PutObjectExtractHandler's switch has no case for
+        #     authTypeStreamingUnsignedTrailer -> falls through unverified.
+        #
+        # minio/minio is ARCHIVED (2026-04-25) and the open-source line has
+        # NO patched release -- "Patched versions: None". The fix ships only
+        # in commercial MinIO AIStor. Both GHSA-9c4q-hq6p-c237 and
+        # GHSA-hv4r-mvr4-25vw name this exact load-balancer block as the
+        # mitigation, so that is what this does.
+        @unsigned_trailer header X-Amz-Content-Sha256 STREAMING-UNSIGNED-PAYLOAD-TRAILER
+        respond @unsigned_trailer 403
+
         # Same cap as the sync route: presigned multipart parts PUT straight
         # here, so an unbounded body is reachable without touching /s3.
         request_body {
