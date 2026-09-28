@@ -34,12 +34,16 @@ Your external proxy terminates TLS.
 4. Per-service ASP.NET DataProtection key volumes instead of one shared `dpdata`.
 5. `init-dpdata` one-shot container fixes volume permissions automatically on first boot.
 6. MongoDB is NOT exposed on a host port.
-7. Healthchecks use `nc` for .NET services, `node` for cors-proxy, and `bun` for monograph — instead of `wget`.
-8. App services run custom images (`dvalin21/notesnook-sync`, `-identity`, `-sse`, `-monograph`, `-web`, all `:latest` = verified build); upstream inbox/themes; infra: `caddy:alpine`, `alpine:latest`, `willfarrell/autoheal:latest`, `vandot/alpine-bash`. Monograph bakes `NOTESNOOK_APP_URL` so Publish links point at your app, not official SaaS.
+7. Healthchecks exercise the real app: `wget` against `/health` for the .NET services and Caddy, `node` for cors-proxy, `bun` for monograph and inbox. A TCP port check (`nc -z`) is *not* used — it passes the instant the socket binds, before the app has resolved Mongo or read its config, so a broken service reports healthy and the proxy routes live traffic into it.
+8. App services run custom images (`dvalin21/notesnook-sync`, `-identity`, `-sse`, `-monograph`, `-web`, all `:latest` = verified build); upstream inbox/themes; infra: `caddy:alpine`, `alpine:latest`, `vandot/alpine-bash`, `minio/mc:RELEASE.2025-08-13T08-35-41Z`. Monograph bakes `NOTESNOOK_APP_URL` so Publish links point at your app, not official SaaS.
+9. Every service has `restart: unless-stopped` and JSON log rotation (`10m` × `3`). Applied through a merged `x-svc` anchor so they hold by construction. `willfarrell/autoheal` was **removed**: it mounted `/var/run/docker.sock` (root on the host) on `:latest`, and existed only to compensate for missing restart policies.
 9. `setup-s3` fails fast if `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` are missing.
 10. Caddy internal reverse proxy routes all traffic through a single port (8080).
 11. MinIO runs custom `dvalin21/minio-notesnook:latest` (console on :9090); mc pinned to `RELEASE.2025-08-13T08-35-41Z` for setup-s3.
-12. MongoDB is `7.0.12` (`dvalin21/notesnook-db:7.0.12`, single-node rs0); .NET driver 3.2.1 is Server-8.x-ready (see Verified status).
+12. MongoDB is `8.0.30` (single-node rs0) from the official `mongo` image; .NET driver 3.2.1 is Server-8.x-ready (see Verified status). There is no `dvalin21/notesnook-db` image — it was an unused duplicate of the official Mongo image and has been removed.
+13. `cors-proxy` is gated: images only (content-type allowlist), a per-client rate limit, and a domain allowlist. It is an internet-facing fetch proxy, so an open one is a liability. See [CORS proxy](#cors-proxy-corsdomain).
+14. Uploads are bounded at the edge — `request_body max_size 100MB` on the sync and attach routes, so no client can buffer an unbounded body into the server.
+15. The `validate` gate fails the boot if any required variable is missing, including `SELF_HOSTED`, `MINIO_ROOT_*` and `SSE_SERVER_PUBLIC_URL`.
 
 ---
 
@@ -156,9 +160,10 @@ network. This is a security hardening over the upstream stack.
 | `MONOGRAPH_PUBLIC_URL` | **Yes** — Web URL (web client only) | `notes.example.com` / `example.com` | `monograph-server:3000` |
 | `ATTACHMENTS_SERVER_PUBLIC_URL` | **No** — server-side only | `attach.example.com` | `notesnook-s3:9000` |
 
-The Android client has **exactly three** URL fields in Settings → Custom server:
-Sync URL, Auth URL, and Monograph URL. `ATTACHMENTS_SERVER_PUBLIC_URL` is **not**
-entered in the client — it is used server-side to generate S3 presigned URLs.
+The Android client has **four** URL fields in Settings → Custom server:
+Sync URL, Auth URL, Events (SSE) URL, and Monograph URL.
+`ATTACHMENTS_SERVER_PUBLIC_URL` is **not** entered in the client — it is used
+server-side to generate S3 presigned URLs.
 
 ### MinIO / S3
 
@@ -395,13 +400,24 @@ Each should return `200` (or a valid page/JSON response).
 `minio.*` returns the MinIO console HTML.
 `inbox.*` and `themes.*` return `200` from their health endpoints.
 
-You can also run the smoke test script which checks health endpoints directly (bypasses Caddy):
+There is also a smoke test that exercises the routes and the OAuth endpoint
+end-to-end. It takes an optional domain argument (default `example.com`):
 
 ```bash
-bash test_functional.sh --install
+bash test_functional.sh
+bash test_functional.sh notes.example.com
 ```
 
-Expected output: all services show `✓`.
+Expected output: every check shows `[PASS]`.
+
+The same structural checks that CI runs — compose validity, restart/logging
+invariants, volume declarations, and shell syntax of every one-shot service —
+can be run locally:
+
+```bash
+./scripts/check-compose-scripts.sh
+python3 scripts/check-compose.py
+```
 
 If your TLS proxy points at `localhost:8080`, these same commands work from
 the host. If from another machine, replace `localhost` with your server's IP.
@@ -524,6 +540,31 @@ The Themes Server is a TRPC service that clones the `notesnook-themes` Git repos
 
 **Data persistence:** The themes data (cloned Git repo + generated metadata) lives inside the container at `/app/notesnook-themes/`. It is re-cloned from `THEMES_REPO_URL` on every container start. The `themesdata` Docker volume persists only `installs.json` (usage tracking), which is optional.
 
+### CORS proxy (`cors.<domain>`)
+
+The Notesnook app uses this to render external images in notes. It is an
+**internet-facing fetch proxy**, which is a liability if left open, so it is
+gated three ways:
+
+1. **Images only.** Responses whose `Content-Type` is not `image/*` get `403`
+   before a single byte is forwarded. This is the control that matters — it
+   stops the proxy being used to launder arbitrary HTML or phishing pages
+   through your domain.
+2. **Domain allowlist** — `NOTESNOOK_CORS_DOMAINS`. Unlisted hosts get `400` and
+   the URL is logged. Default:
+   `imgur.com,wikimedia.org,githubusercontent.com,github.com,github.io,youtube.com,youtube-nocookie.com,redd.it,redditmedia.com`
+   Matching is by suffix, so `thumb.wikimedia.org` is covered by `wikimedia.org`.
+   **When an image fails to render, add its host here** and restart the service.
+3. **Rate limit** — `CORS_RATE_LIMIT` requests per `CORS_RATE_WINDOW_MS` per
+   client (default 120/min).
+
+> The YouTube domains must stay in the allowlist. The service validates the URL
+> *before* it checks for a YouTube embed, so an allowlist without them silently
+> breaks video embeds.
+
+Responses are streamed, not buffered, so a large image cannot exhaust the
+container's memory.
+
 ### Disabling optional services
 
 To run the stack without inbox-api and themes-server:
@@ -554,20 +595,36 @@ Three layers; no single one restores everything (see `backup.sh` header for the 
 
 ```bash
 # 1. Stack state: Mongo (fsyncLock + tar) + all dpdata-* + keystore + .env snapshot.
-#    Dumps land in ./backups/<UTC-stamp>/ (gitignored) — copy off-host, cron it.
+#    Dumps land in ./backups/<UTC-stamp>/ (gitignored, mode 0700 — it contains
+#    live credentials). Copy off-host, or rely on a whole-VM snapshot for the
+#    crash-consistent layer.
 docker compose --profile backup run --rm backup
 
-# 2. Attachments (bulk blobs — mirrored, never tarred; tar would stall the stack
-#    and duplicate what MinIO already versions). Needs MINIO_ROOT_* from .env:
+# 2. Attachments (bulk blobs). Mirrored with `mc mirror`, never tarred: tarring
+#    s3data would stall the stack, and the bucket is versioned so a bad delete
+#    is already recoverable in place. Needs MINIO_ROOT_* from .env:
 source .env
 docker run --rm --network notesnook-sync-server_notesnook \
-  -e MC_HOST_src=https://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@notesnook-s3:9000 \
+  -e MC_HOST_src=http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@notesnook-s3:9000 \
   -v /backup/s3:/dest minio/mc:RELEASE.2025-08-13T08-35-41Z \
   mirror --overwrite src/attachments /dest
 
 # 3. Per-user client exports (web UI → Backup). Ultimate parachute: restores notes
 #    into ANY Notesnook, but carries no accounts/shares/keys. Users own this one.
 ```
+
+`backup.sh` **fails loudly**. It exits non-zero if any volume fails to archive or
+produces an empty archive, and prints `BACKUP_FAILED`. An earlier version printed
+`SKIP` per unmounted volume, wrote a 20-byte archive of the missing directory and
+still printed `BACKUP_OK` with exit 0 — a monitor wired to that string reported a
+healthy backup of nothing. `tar` exit 1 ("changed while reading") is treated as a
+**warning**, not a failure: `fsyncLock` blocks client writes but WiredTiger still
+advances its own journal, so `dbdata` is never fully static. Only tar exit ≥ 2
+(cannot open, out of space) is fatal.
+
+A whole-VM snapshot (Proxmox PBS, vzdump, ZFS) is a valid *crash-consistent*
+layer, but it is not application-consistent: a mongod snapshots mid-write needs
+WiredTiger recovery on restore. Layer 1 is what removes that risk.
 
 Restore order: `.env` → volumes back in place → `up -d` → users re-login only if
 dpdata was lost. Loss matrix: no dpdata = sessions die (data safe); no keystore =
@@ -581,17 +638,21 @@ docker compose pull
 docker compose up -d
 ```
 
+Review `docker compose config` output before applying — the compose file uses
+merge anchors (`x-svc`, `x-app-env`) so that restart policy and log rotation are
+applied to every service by construction.
+
 ### Disaster recovery: DataProtection keys
 
 The `dpdata-*` volumes store ASP.NET DataProtection keys. These keys
 validate authentication cookies and tokens. If you lose these volumes,
 all users will be logged out and must sign in again.
 
-Back them up alongside your MongoDB backup:
+There are exactly three: `dpdata-identity`, `dpdata-notesnook`, `dpdata-sse`.
+(`dpdata-monograph` was removed — `monograph-server` is a Bun image with no
+ASP.NET DataProtection, so that volume was permanently empty.)
 
-```bash
-# Backup all dpdata volumes
-for vol in dpdata-identity dpdata-notesnook dpdata-sse dpdata-monograph; do
+Back them up alongside your MongoDB backup, or simply use layer 1 above:
   docker run --rm -v notesnook-sync-server_${vol}:/data -v /backup/dpdata:/backup \
     alpine tar czf /backup/dpdata/${vol}-$(date +%Y%m%d).tar.gz -C /data .
 done
