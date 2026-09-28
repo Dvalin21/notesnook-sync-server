@@ -459,16 +459,24 @@ What you should see in order:
 
 1. **`validate`** exits with `All required environment variables are set.`
 2. **`init-dpdata`** exits with `Setting DataProtection volume permissions... Done.`
-3. **`notesnook-db`** starts MongoDB and initiates a replica set
-4. **`notesnook-s3`** starts MinIO S3 storage
-5. **`identity-server`** starts on port 8264
-6. **`notesnook-server`** starts on port 5264
-7. **`sse-server`** starts on port 7264
-8. **`monograph-server`** starts on port 3000
-9. **`cors-proxy`** starts on port 3000
-10. **`inbox-api`** starts on port 5181 (optional — set `INBOX_API_PUBLIC_URL` to enable)
-11. **`themes-server`** starts on port 9000 (optional — set `THEMES_SERVER_PUBLIC_URL` to enable)
-12. **`caddy`** starts routing on port 80 (mapped to host port 8080)
+3. **`init-mongo-key`** generates the replica-set keyfile, owned by uid 999 — then exits
+4. **`notesnook-db`** starts MongoDB, creates the admin user, and initiates the replica set
+5. **`notesnook-s3`** starts MinIO S3 storage
+6. **`identity-server`** starts on port 8264
+7. **`notesnook-server`** starts on port 5264
+8. **`sse-server`** starts on port 7264
+9. **`monograph-server`** starts on port 3000
+10. **`cors-proxy`** starts on port 3000
+11. **`inbox-api`** starts on port 5181 (optional — set `INBOX_API_PUBLIC_URL` to enable)
+12. **`themes-server`** starts on port 9000 (optional — set `THEMES_SERVER_PUBLIC_URL` to enable)
+13. **`caddy`** starts routing on port 80 (mapped to host port 8080)
+
+**You do not create the MongoDB keyfile or the database user.** `init-mongo-key`
+generates the keyfile into a named volume and fixes its ownership, because
+`mongod` (uid 999) refuses a keyfile it does not own. The admin user is created
+by the official image's own entrypoint from `MONGO_USER` / `MONGO_PASS`, which
+only happens on an empty volume. On an existing deployment both are left alone,
+so restarting never breaks replica-set membership.
 
 **First boot takes 2-5 minutes.** MongoDB replica set initialization and
 .NET DataProtection key generation happen on first startup.
