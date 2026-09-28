@@ -79,6 +79,11 @@ services:
 
   cors-proxy:
     <<: *svc
+    # Published image, not just a local build. Before this had an image: tag
+    # the published dvalin21/notesnook-cors-proxy was never used, so the
+    # security fixes below only existed on whichever machine built them.
+    # build: is kept as an opt-in override for local development.
+    image: dvalin21/notesnook-cors-proxy:latest
     build: ./cors-proxy
     deploy:
       resources:
