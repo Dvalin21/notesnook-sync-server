@@ -254,13 +254,23 @@ and rewrite its own access policy. The script reads the stored policy back and
 **refuses to continue** if it sees `s3:*`, `s3:DeleteBucket` or
 `s3:PutBucketPolicy`.
 
-> **Known limitation.** The .NET services take the whole `.env` via
-> `env_file`, so the sync-server process still has `MINIO_ROOT_USER` /
-> `MINIO_ROOT_PASSWORD` in its environment even though it never reads them.
-> Scoping therefore limits what the *application code path* can do; it does not
-> stop an attacker who reads that process's environment. Narrowing the
-> `env_file` for those services is a larger change than it looks, because they
-> legitimately read a lot of `.env`.
+> **Not a vulnerability, but worth knowing.** The .NET services take the whole
+> `.env` via `env_file`, so the sync-server process still has
+> `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` in its environment even though it
+> never reads them. Nothing here is remotely exploitable — environment
+> variables are not readable over the network, and reaching them requires code
+> execution inside that container first, at which point the attacker already
+> holds the Mongo credentials in `MONGODB_CONNECTION_STRING` and therefore
+> already has the notes. Scoping limits what the *application code path* can
+> do; it is defence in depth, not a fix. Narrowing `env_file` for the .NET
+> services is not worth the regression risk: they legitimately read ~20
+> variables across flows (signup, MFA, password reset, attachments, monograph)
+> that cannot be fully exercised from a shell.
+>
+> The one place it *was* free: `cors-proxy` has no `env_file` at all. It is
+> the only unauthenticated service, and it reads seven variables that compose
+> passes explicitly — so it no longer receives the Mongo root password, the
+> MinIO root password, the SMTP password or `NOTESNOOK_API_SECRET`.
 
 ### How attachments work
 

@@ -88,7 +88,13 @@ services:
         reservations:
           cpus: '0.1'
           memory: 32M
-    env_file: *envfile
+    # No env_file here, deliberately. This is the only service reachable
+    # without authentication, and it reads exactly seven variables
+    # (ALLOWED_DOMAINS, ALLOWED_ORIGINS, HOST, NODE_ENV, PORT, RATE_LIMIT,
+    # RATE_WINDOW_MS) -- six of which are passed below, and NODE_ENV has a
+    # default in the code. env_file was therefore handing this service the
+    # Mongo root password, the MinIO root password, the SMTP password and
+    # NOTESNOOK_API_SECRET, none of which it can read.
     environment:
       ALLOWED_ORIGINS: ${NOTESNOOK_CORS_ORIGINS}
       # ponytail: this service is an internet-facing fetch proxy, so it needs a
