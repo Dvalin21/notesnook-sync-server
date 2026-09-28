@@ -231,21 +231,36 @@ standalone deployments do not register the route"), CVE-2023-28432 (cluster-only
 
 #### Credentials
 
-The sync server currently authenticates to MinIO as **root**
-(`S3_ACCESS_KEY_ID=${MINIO_ROOT_USER}`). A bucket-scoped service account limited
-to `arn:aws:s3:::attachments/*` is preferable, but `mc admin user add` does not
-work against this MinIO build — the secret key never reaches the server:
+The sync server authenticates to MinIO as a **bucket-scoped service account**,
+not as root. Generate it with:
 
-```
-PUT /minio/admin/v3/add-user?accessKey=abcdefghij
--> XMinioAdminInvalidSecretKey: The secret key is invalid.
-   (secret key length should be between 8 and 40)
+```bash
+bash scripts/create-minio-app-user.sh
 ```
 
-The supplied secret is 8–40 characters and `IsValidSecretKey()` only enforces
-`len >= 8`, so the request is well-formed and the rejection is a defect in this
-build. Do not assume the account was created — verify with
-`mc admin user info <alias> <key>` before relying on it.
+It creates the `attachments` bucket if missing, enables versioning, writes a
+policy, creates the user, smoke-tests put/read/delete, then prints the two
+lines to add to `.env`:
+
+```
+S3_ACCESS_KEY_ID=<generated>
+S3_ACCESS_KEY=<generated>
+```
+
+**The policy enumerates the object actions and nothing else.** Do not widen it
+to `"s3:*"`: on a bucket resource that also grants `s3:DeleteBucket` and
+`s3:PutBucketPolicy`, so the notes API would be able to delete its own bucket
+and rewrite its own access policy. The script reads the stored policy back and
+**refuses to continue** if it sees `s3:*`, `s3:DeleteBucket` or
+`s3:PutBucketPolicy`.
+
+> **Known limitation.** The .NET services take the whole `.env` via
+> `env_file`, so the sync-server process still has `MINIO_ROOT_USER` /
+> `MINIO_ROOT_PASSWORD` in its environment even though it never reads them.
+> Scoping therefore limits what the *application code path* can do; it does not
+> stop an attacker who reads that process's environment. Narrowing the
+> `env_file` for those services is a larger change than it looks, because they
+> legitimately read a lot of `.env`.
 
 ### How attachments work
 
@@ -672,9 +687,11 @@ Three layers; no single one restores everything (see `backup.sh` header for the 
 #    crash-consistent layer.
 docker compose --profile backup run --rm backup
 
-# 2. Attachments (bulk blobs). Mirrored with `mc mirror`, never tarred: tarring
-#    s3data would stall the stack, and the bucket is versioned so a bad delete
-#    is already recoverable in place. Needs MINIO_ROOT_* from .env:
+# 2. Attachments (bulk blobs) are ALSO in layer 1 now, as `s3data.tgz`.
+#    They used to be excluded on the theory that MinIO versioning plus a PBS
+#    snapshot covered them -- neither was true, and a stray account removed the
+#    whole bucket with nothing to restore from. A mirror is still worth having
+#    for off-host copies:
 source .env
 docker run --rm --network notesnook-sync-server_notesnook \
   -e MC_HOST_src=http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@notesnook-s3:9000 \
@@ -684,6 +701,9 @@ docker run --rm --network notesnook-sync-server_notesnook \
 # 3. Per-user client exports (web UI → Backup). Ultimate parachute: restores notes
 #    into ANY Notesnook, but carries no accounts/shares/keys. Users own this one.
 ```
+
+Layer 1 archives `s3data` alongside the rest. For a very large `s3data` you may
+prefer to drop it from the loop and rely on the mirror plus PBS.
 
 `backup.sh` **fails loudly**. It exits non-zero if any volume fails to archive or
 produces an empty archive, and prints `BACKUP_FAILED`. An earlier version printed

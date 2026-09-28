@@ -326,8 +326,13 @@ services:
       ASPNETCORE_HTTP_PORTS: '5264'
       MONGODB_CONNECTION_STRING: mongodb://${MONGO_USER}:${MONGO_PASS}@notesnook-db:27017/?replSet=rs0&authSource=admin
       MONGODB_DATABASE_NAME: notesnook
-      S3_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      # Bucket-scoped service account, NOT MinIO root. The root credentials
+      # grant s3:* on the server, so a compromise of the notes API would be a
+      # compromise of object-storage administration. Policy enumerates only
+      # the object actions this server needs -- s3:* on a bucket also grants
+      # s3:DeleteBucket, which is not something the notes API should ever have.
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY not set - run scripts/create-minio-app-user.sh}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID not set - run scripts/create-minio-app-user.sh}
       S3_BUCKET_NAME: attachments
       S3_INTERNAL_BUCKET_NAME: attachments
       S3_INTERNAL_SERVICE_URL: http://notesnook-s3:9000
@@ -392,6 +397,7 @@ services:
     - ./.env:/envfile:ro
     - ./backups:/backups
     - dbdata:/vol/dbdata:ro
+    - s3data:/vol/s3data:ro
     - dpdata-identity:/vol/dpdata-identity:ro
     - dpdata-notesnook:/vol/dpdata-notesnook:ro
     - dpdata-sse:/vol/dpdata-sse:ro
@@ -515,6 +521,8 @@ services:
         "MINIO_ROOT_PASSWORD"
         "MONGO_USER"
         "MONGO_PASS"
+        "S3_ACCESS_KEY_ID"
+        "S3_ACCESS_KEY"
       )
       # SELF_HOSTED=0 sends signup at cloud endpoints that cannot work here and
       # the request then hangs until the proxy times out. Fail at boot instead.

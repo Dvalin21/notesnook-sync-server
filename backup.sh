@@ -11,7 +11,11 @@
 #   dpdata-*         ASP.NET DataProtection keys. Lose them = everyone logged out (data intact).
 #   keystore-data    GPG signing keys. Lose them = regenerate; old verify links die.
 #   .env             Secrets + URLs. Without it the dump is unrestorable as THIS stack.
-#   s3data           NOT here (bulk blobs). MinIO versioning + PBS covers it.
+#   s3data           Attachment blobs. Previously EXCLUDED on the theory that
+#                    MinIO versioning plus a PBS snapshot covered it -- neither
+#                    was true. A stray scoped account deleted the whole bucket
+#                    and there was nothing to restore from. It is small (single
+#                    digits of MB); archive it.
 # ponytail: tar beats mongodump (no tools image, catches dpdata/keystore in one pass).
 set -eu
 STAMP=${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
@@ -35,7 +39,7 @@ trap 'timeout 60 mongosh "$MONGO" --quiet --eval "db.fsyncUnlock()" >/dev/null 2
 # ASP.NET DataProtection, so that volume is permanently empty (verified: 0 files).
 # Backing up a phantom is how you "restore" a keyring that never existed.
 fail=0
-for v in dbdata dpdata-identity dpdata-notesnook dpdata-sse keystore-data; do
+for v in dbdata s3data dpdata-identity dpdata-notesnook dpdata-sse keystore-data; do
   # --numeric-owner preserves UID/GID so dpdata/keystore restore with the
   # ownership the .NET host needs. Without it, restores break DataProtection.
   set +e
