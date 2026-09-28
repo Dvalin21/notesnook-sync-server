@@ -1,97 +1,97 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-# GitHub recommends pinning actions to a commit SHA.
-# To get a newer version, you will need to update the SHA.
-# You can also reference a tag or branch, but the action may change without warning.
-
 name: Publish Docker images
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+
+# Least privilege: this pushes to Docker Hub, so it needs no GitHub Packages,
+# OIDC or attestation scopes. The previous revision granted id-token:write and
+# attestations:write and only ever pushed to streetwriters/*.
+permissions:
+  contents: read
+
+env:
+  REGISTRY: dvalin21
 
 jobs:
-  push_to_registry:
-    name: Push Docker image to Docker Hub
+  build:
+    name: Build and push ${{ matrix.image }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        repos:
-          - image: streetwriters/notesnook-sync
+        include:
+          - image: notesnook-sync
             file: ./Notesnook.API/Dockerfile
             context: .
-
-          - image: streetwriters/cors-proxy
-            file: ./cors-proxy/Dockerfile
-            context: ./cors-proxy/
-
-          - image: streetwriters/identity
+          - image: notesnook-identity
             file: ./Streetwriters.Identity/Dockerfile
             context: .
-
-          - image: streetwriters/sse
+          - image: notesnook-sse
             file: ./Streetwriters.Messenger/Dockerfile
             context: .
-
-          - image: streetwriters/notesnook-inbox
-            file: ./Notesnook.Inbox.API/Dockerfile
-            context: ./Notesnook.Inbox.API/
-    permissions:
-      packages: write
-      contents: read
-      attestations: write
-      id-token: write
+          - image: cors-proxy
+            file: ./cors-proxy/Dockerfile
+            context: ./cors-proxy/
+          # These two build from a pinned upstream commit inside the Dockerfile
+          # (streetwriters/notesnook @ 143892e) and ship example.com placeholders
+          # that web/entrypoint.sh swaps at boot, so no operator domain is ever
+          # baked into a published image.
+          - image: notesnook-web
+            file: ./web/Dockerfile
+            context: ./web/
+            # web/Dockerfile declares these ARGs with NO default, and vite
+            # inlines them at build time. Building without them bakes EMPTY
+            # hosts and ships a broken image. Pin the placeholders: the
+            # published image must never carry an operator's real domain, and
+            # web/entrypoint.sh swaps in the real URLs at boot.
+            build-args: |
+              NN_API_HOST=https://sync.example.com
+              NN_AUTH_HOST=https://auth.example.com
+              NN_SSE_HOST=https://sse.example.com
+              NN_MONOGRAPH_HOST=https://notes.example.com
+          - image: notesnook-monograph
+            file: ./monograph/Dockerfile
+            context: ./monograph/
     steps:
+      # Actions are pinned by SHA. A tag can be repointed at new code without a
+      # review, and this workflow holds a Docker Hub credential.
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # Setup Buildx
-      - name: Docker Setup Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          platforms: linux/amd64,linux/arm64
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@49b3bc8e6bdd4d60b7d1550c85d4e0d63d0c2b6f # v3.6.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.10.0
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-          ecr: auto
-          logout: true
 
-      # Pull previous image from docker hub to use it as cache to improve the image build time.
-      - name: docker pull cache image
-        continue-on-error: true
-        run: docker pull ${{ matrix.repos.image }}:latest
-
-      # Setup QEMU
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Extract metadata (tags, labels) for Docker
+      - name: Generate tags and labels
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
         with:
-          images: ${{ matrix.repos.image }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
 
-      - name: Build and push Docker image
-        id: push
-        uses: docker/build-push-action@v6
+      - name: Build and push
+        uses: docker/build-push-action@ca877d9245402d1537745e0e356eab47c3520991 # v6.15.0
         with:
-          context: ${{ matrix.repos.context }}
-          file: ${{ matrix.repos.file }}
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: ${{ matrix.repos.image }}:latest
-
-      - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: index.docker.io/${{ matrix.repos.image }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build-args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
