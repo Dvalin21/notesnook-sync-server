@@ -25,6 +25,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
 using Notesnook.API.Interfaces;
 using Notesnook.API.Models;
@@ -44,6 +45,10 @@ namespace Notesnook.API.Controllers
     {
         [HttpPost]
         [AllowAnonymous]
+        // Throttles anonymous account creation per client IP. Without it this
+        // endpoint accepts unlimited signups for arbitrary, unverified addresses
+        // and mails each one, which is an open relay by another name.
+        [EnableRateLimiting("signup")]
         public async Task<IActionResult> Signup([FromForm] SignupForm form)
         {
             try

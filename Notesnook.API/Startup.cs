@@ -24,6 +24,7 @@ using System.IO.Compression;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Encodings.Web;
+using System.Threading.RateLimiting;
 using System.Threading.Tasks;
 using Amazon.Runtime;
 using StackExchange.Redis;
@@ -108,6 +109,47 @@ namespace Notesnook.API
             services.AddDistributedMemoryCache(delegate (MemoryDistributedCacheOptions cacheOptions)
             {
                 cacheOptions.SizeLimit = 262144000L;
+            });
+
+            Trace("ConfigureServices: RateLimiter");
+            // The sync server had NO rate limiter at all. Streetwriters.Identity
+            // registers its own, but this is a separate service with a separate
+            // DI container, so [EnableRateLimiting] on an action here would throw
+            // at startup if the policy were not registered here too.
+            //
+            // Signup is the reason: POST /users is [AllowAnonymous] and
+            // unthrottled, and UserAccountService only validates that an email
+            // address is well-FORMED, never that the caller owns it. Measured on a
+            // live instance: 5 accounts in 1.58s, each sending a real message to
+            // an attacker-chosen address. That is an email relay, and it is the
+            // one way an anonymous caller can make this server talk to the world.
+            //
+            // Keyed on the client IP. That is only meaningful because
+            // UseForwardedHeadersWithKnownProxies (Startup.cs, later) is
+            // configured AND KNOWN_PROXIES names Caddy -- without that every
+            // request appears to come from the proxy and this becomes one global
+            // bucket, which is worse than no limit because it looks configured.
+            services.AddRateLimiter(options =>
+            {
+                options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+                options.AddPolicy("signup", context =>
+                {
+                    var key = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+                    return RateLimitPartition.GetSlidingWindowLimiter(key, _ =>
+                        new SlidingWindowRateLimiterOptions
+                        {
+                            // A self-hosted instance is usually a household behind
+                            // one NAT address. 5 per 10 minutes lets a family
+                            // register several people while stopping a relay, which
+                            // needs volume to be worth anything.
+                            PermitLimit = 5,
+                            Window = TimeSpan.FromMinutes(10),
+                            SegmentsPerWindow = 10,
+                            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                            QueueLimit = 0,
+                            AutoReplenishment = true
+                        });
+                });
             });
 
             Trace("ConfigureServices: Authorization");
@@ -310,7 +352,8 @@ namespace Notesnook.API
         {
             Trace("Configure: START");
 
-            app.UseForwardedHeadersWithKnownProxies(env);
+              app.UseForwardedHeadersWithKnownProxies(env);
+
 
             // ponytail: OpenTelemetry commented out for debugging
             // app.UseOpenTelemetryPrometheusScrapingEndpoint((context) => context.Request.Path == "/metrics" && context.Connection.LocalPort == 5067);
@@ -335,6 +378,17 @@ namespace Notesnook.API
 
             Trace("Configure: Routing");
             app.UseRouting();
+
+            // Must come AFTER UseRouting, not before. The rate limiting middleware
+            // reads [EnableRateLimiting] from ENDPOINT metadata, which does not
+            // exist until routing has run. Two ways this failed on a live build,
+            // both silently allowing every request:
+            //   1. AddRateLimiter without UseRateLimiter -- policy defined, never
+            //      enforced. 8 signups against a limit of 5 -> 8x HTTP 200, 8 emails.
+            //   2. UseRateLimiter placed before UseRouting -- middleware runs, but
+            //      finds no endpoint metadata, so the attribute is invisible.
+            // Streetwriters.Identity/Startup.cs has had the correct order all along.
+            app.UseRateLimiter();
 
             Trace("Configure: Authentication");
             app.UseAuthentication();
