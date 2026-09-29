@@ -239,7 +239,15 @@ namespace Streetwriters.Identity.Controllers
 #if (DEBUG || STAGING)
             return Ok(callbackUrl);
 #else
-                        logger.LogInformation("Password reset email sent to: {Email}, callback URL: {CallbackUrl}", user.Email, callbackUrl);
+                        // Deliberately does NOT log callbackUrl. It carries the
+                        // single-use ResetPassword token, so logging it is the same
+                        // exposure as the one Caddyfile redacts X-Amz-Signature for
+                        // (see the CVE-2026-40344 note there): the log rotation
+                        // in x-svc keeps 3x10MB of it. Also does not claim the
+                        // mail was "sent" -- this line runs BEFORE the send, and
+                        // the send throws when SMTP is unconfigured, so the old
+                        // wording recorded a delivery that never happened.
+                        logger.LogInformation("Password reset requested for: {Email}", user.Email);
                         await EmailSender.SendPasswordResetEmailAsync(user.Email, callbackUrl, client);
                         return Ok();
 #endif
