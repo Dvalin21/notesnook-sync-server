@@ -35,6 +35,16 @@ x-envfile: &envfile
 services:
   caddy:
     <<: *svc
+    # Pinned because the .NET services must name their immediate upstream in
+    # KNOWN_PROXIES, and their immediate upstream is THIS container, not the
+    # TLS terminator in front of it. Docker assigns 172.19.0.x on a best-effort
+    # basis and the address moves whenever this container is recreated -- which
+    # is every time the Caddyfile changes, since `admin off` means a recreate
+    # is the only way to reload. An unpinned address would silently re-break
+    # forwarded headers on the next edit. Must match KNOWN_PROXIES in .env.
+    networks:
+      notesnook:
+        ipv4_address: 172.19.0.12
     depends_on:
       cors-proxy:
         condition: service_healthy
@@ -578,11 +588,49 @@ services:
       fi
       for var in "$${required_vars[@]}"; do
         if [ -z "$${!var}" ]; then
-          echo "Error: Required environment variable $$var is not set."
+          echo "Error: Required environment variable $$var is not set." >&2
           exit 1
         fi
       done
-      echo "All required environment variables are set."
+      # A URL that is present but malformed is worse than one that is missing,
+      # because nothing downstream complains: Caddy still routes on SERVER_DOMAIN,
+      # every healthcheck still passes, and the stack reports 11/11 healthy while
+      # the server hands clients a URL it cannot serve. Two shapes break this way:
+      #   - no scheme at all  (NOTESNOOK_APP_HOST=app.example.com), which the
+      #     identity server pastes into a Location header and Caddy pastes into
+      #     Access-Control-Allow-Origin; neither is legal in that position.
+      #   - a host on the wrong domain, e.g. SERVER_DOMAIN was changed after
+      #     copy-pasting the URLs. Routing and configuration silently disagree.
+      # Both are cheap to catch here and expensive to discover from a client.
+      url_vars=(
+        "NOTESNOOK_APP_PUBLIC_URL"
+        "AUTH_SERVER_PUBLIC_URL"
+        "MONOGRAPH_PUBLIC_URL"
+        "ATTACHMENTS_SERVER_PUBLIC_URL"
+        "SSE_SERVER_PUBLIC_URL"
+        "NOTESNOOK_APP_HOST"
+      )
+      for var in "$${url_vars[@]}"; do
+        value="$${!var}"
+        case "$$value" in
+          *"://"*) ;;
+          *)
+            echo "Error: $$var must be an absolute URL including a scheme, got '$$value'." >&2
+            exit 1
+            ;;
+        esac
+        host="$${value#*://}"
+        host="$${host%%/*}"
+        host="$${host%%:*}"
+        case "$$host" in
+          *"$$SERVER_DOMAIN") ;;
+          *)
+            echo "Error: $$var points at '$$host', which is not on SERVER_DOMAIN '$$SERVER_DOMAIN'." >&2
+            exit 1
+            ;;
+        esac
+      done
+      echo "All required environment variables are set and all public URLs are well-formed."
     entrypoint: /bin/bash
     env_file: *envfile
     image: vandot/alpine-bash
