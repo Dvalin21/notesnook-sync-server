@@ -44,6 +44,20 @@ namespace Streetwriters.Common
 
         public override string ToString()
         {
+            // Prefer the operator's public URL. The old version hardcoded "http"
+            // and built from Hostname+Port, so the OIDC issuer published as
+            // "http://identity-server:8264" -- an internal Docker address on the
+            // public internet, with no scheme. RFC 8414 requires the issuer to be
+            // an https URL with every endpoint under it, so any spec-compliant
+            // client rejects the instance; it only appeared to work because the
+            // Notesnook client does not validate the issuer.
+            //
+            // UrlExtensions.TokenLink already prefers PublicURL for token links;
+            // this is the same rule applied to the issuer. Falls back to
+            // host+port when no public URL is configured, which is the
+            // dotnet-run-on-your-laptop case from the upstream README.
+            if (PublicURL != null) return PublicURL.ToString().TrimEnd('/');
+
             var url = "";
             url += "http";
             url += $"://{Hostname}";
@@ -53,8 +67,16 @@ namespace Streetwriters.Common
 
         public string WS()
         {
+            // Deliberately does NOT prefer PublicURL. WampServers.cs uses this to
+            // build the INTERNAL service-to-service address
+            // ("{Servers.IdentityServer.WS()}/wamp"), and the public URL does not
+            // resolve to the container from inside the docker network. Preferring
+            // it here would move WAMP onto the public route and break it.
+            //
+            // Both ternary branches were "ws" upstream, so this never returned
+            // "wss" even with a certificate present.
             var url = "";
-            url += IsSecure ? "ws" : "ws";
+            url += IsSecure ? "wss" : "ws";
             url += $"://{Hostname}";
             url += Port == 80 ? "" : $":{Port}";
             return url;
