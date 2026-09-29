@@ -34,7 +34,11 @@ jobs:
           done
 
       - name: Compose file is valid
-        run: docker compose config -q
+        # --env-file .env.ci, NOT the real .env. .env is gitignored, so without
+        # this the step failed on EVERY push at the ${S3_ACCESS_KEY:?} guard
+        # and the three steps below it never ran at all. .env.ci holds dummy
+        # values only -- it is the compose PARSER being exercised, not a deploy.
+        run: docker compose --env-file .env.ci config -q
 
       - name: Compose structure invariants
         # restart policy + log rotation + networks + volume declarations

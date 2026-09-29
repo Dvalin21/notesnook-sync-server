@@ -25,12 +25,19 @@ except ModuleNotFoundError:
 
 
 def load() -> dict:
+    # Read piped input when there is any. `isatty()` was the wrong test: in CI
+    # stdin is ALWAYS a pipe, so the old guard read empty stdin, got None, and
+    # printed "OK 0 services" with exit 0. The check had never validated
+    # anything, and the CI step reported success. An empty read is the real
+    # signal that nobody piped anything, so fall through and run compose.
     if not sys.stdin.isatty():
-        return yaml.safe_load(sys.stdin)
+        piped = sys.stdin.read()
+        if piped.strip():
+            return yaml.safe_load(piped) or {}
     out = subprocess.run(
         ["docker", "compose", "config"], capture_output=True, text=True, check=True
     )
-    return yaml.safe_load(out.stdout)
+    return yaml.safe_load(out.stdout) or {}
 
 
 def main() -> int:
@@ -50,8 +57,16 @@ def main() -> int:
     used: set[str] = set()
     for s in services.values():
         for v in s.get("volumes") or []:
-            src = v.split(":")[0]
-            if not src.startswith((".", "/")):
+            # `docker compose config` emits LONG syntax (a dict) on modern
+            # Compose, and short syntax (a string) on older versions and in
+            # hand-written fixtures. The old code assumed str and died with
+            # "'dict' object has no attribute 'split'" on the very output it
+            # was supposed to be checking.
+            if isinstance(v, dict):
+                src = v.get("source") or ""
+            else:
+                src = str(v).split(":")[0]
+            if src and not src.startswith((".", "/")):
                 used.add(src)
 
     if undeclared := used - declared:
