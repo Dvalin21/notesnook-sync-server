@@ -1,0 +1,56 @@
+From 44951eba3a72d4ca64abc7d9b0cdbbd93c5a8ca4 Mon Sep 17 00:00:00 2001
+From: cduzer <95446980+cduzer@users.noreply.github.com>
+Date: Fri, 10 Oct 2025 20:57:35 +0200
+Subject: [PATCH] fix: allow trailing slash in AWS S3 POST policies (#21612)
+
+---
+ cmd/signature-v4-parser.go      |  2 +-
+ cmd/signature-v4-parser_test.go | 19 +++++++++++++++++++
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/cmd/signature-v4-parser.go b/cmd/signature-v4-parser.go
+index 62ba6f769..f6866cb85 100644
+--- a/cmd/signature-v4-parser.go
++++ b/cmd/signature-v4-parser.go
+@@ -75,7 +75,7 @@ func parseCredentialHeader(credElement string, region string, stype serviceType)
+ 	if creds[0] != "Credential" {
+ 		return ch, ErrMissingCredTag
+ 	}
+-	credElements := strings.Split(strings.TrimSpace(creds[1]), SlashSeparator)
++	credElements := strings.Split(strings.TrimRight(strings.TrimSpace(creds[1]), SlashSeparator), SlashSeparator)
+ 	if len(credElements) < 5 {
+ 		return ch, ErrCredMalformed
+ 	}
+diff --git a/cmd/signature-v4-parser_test.go b/cmd/signature-v4-parser_test.go
+index 6f6eb949a..3d9001334 100644
+--- a/cmd/signature-v4-parser_test.go
++++ b/cmd/signature-v4-parser_test.go
+@@ -236,6 +236,25 @@ func TestParseCredentialHeader(t *testing.T) {
+ 				"aws4_request"),
+ 			expectedErrCode: ErrNone,
+ 		},
++		// Test Case - 12.
++		// Test case with right inputs but trailing `/`. Expected to return a valid CredentialHeader.
++		// "aws4_request" is the valid request version.
++		{
++			inputCredentialStr: generateCredentialStr(
++				"Z7IXGOO6BZ0REAN1Q26I",
++				sampleTimeStr,
++				"us-west-1",
++				"s3",
++				"aws4_request/"),
++			expectedCredentials: generateCredentials(
++				t,
++				"Z7IXGOO6BZ0REAN1Q26I",
++				sampleTimeStr,
++				"us-west-1",
++				"s3",
++				"aws4_request"),
++			expectedErrCode: ErrNone,
++		},
+ 	}
+ 
+ 	for i, testCase := range testCases {
+-- 
+2.47.3
+

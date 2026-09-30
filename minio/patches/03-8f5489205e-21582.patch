@@ -1,0 +1,45 @@
+From 8f5489205e41ab58f239dba81541231a84eea497 Mon Sep 17 00:00:00 2001
+From: mosesdd <52199364+mosesdd@users.noreply.github.com>
+Date: Wed, 17 Sep 2025 09:58:27 +0200
+Subject: [PATCH] fix: LDAP TLS handshake fails with StartTLS and
+ tls_skip_verify=off (#21582)
+
+Fixes #21581
+---
+ internal/config/identity/ldap/config.go | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/internal/config/identity/ldap/config.go b/internal/config/identity/ldap/config.go
+index 00dbedc9c..48186b2f4 100644
+--- a/internal/config/identity/ldap/config.go
++++ b/internal/config/identity/ldap/config.go
+@@ -21,6 +21,7 @@ import (
+ 	"crypto/tls"
+ 	"crypto/x509"
+ 	"errors"
++	"net"
+ 	"sort"
+ 	"time"
+ 
+@@ -190,10 +191,18 @@ func Lookup(s config.Config, rootCAs *x509.CertPool) (l Config, err error) {
+ 	if ldapServer == "" {
+ 		return l, nil
+ 	}
++
++	// Set ServerName in TLS config for proper certificate validation
++	host, _, err := net.SplitHostPort(ldapServer)
++	if err != nil {
++		host = ldapServer
++	}
++	
+ 	l.LDAP = ldap.Config{
+ 		ServerAddr:    ldapServer,
+ 		SRVRecordName: getCfgVal(SRVRecordName),
+ 		TLS: &tls.Config{
++			ServerName:         host,
+ 			MinVersion:         tls.VersionTLS12,
+ 			NextProtos:         []string{"h2", "http/1.1"},
+ 			ClientSessionCache: tls.NewLRUClientSessionCache(100),
+-- 
+2.47.3
+

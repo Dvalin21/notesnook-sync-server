@@ -1,0 +1,40 @@
+From 0654eb5533ef9415861b8d8ce57261e53882dac1 Mon Sep 17 00:00:00 2001
+From: yangw <wuyangmuc@gmail.com>
+Date: Wed, 1 Oct 2025 14:06:01 +0800
+Subject: [PATCH] fix: timeN function return final closure not be called
+ (#21615)
+
+---
+ cmd/data-scanner-metric.go | 14 ++++++--------
+ 1 file changed, 6 insertions(+), 8 deletions(-)
+
+diff --git a/cmd/data-scanner-metric.go b/cmd/data-scanner-metric.go
+index 1a8f201fb..db0bd21b9 100644
+--- a/cmd/data-scanner-metric.go
++++ b/cmd/data-scanner-metric.go
+@@ -106,16 +106,14 @@ func (p *scannerMetrics) log(s scannerMetric, paths ...string) func(custom map[s
+ 
+ // time n scanner actions.
+ // Use for s < scannerMetricLastRealtime
+-func (p *scannerMetrics) timeN(s scannerMetric) func(n int) func() {
++func (p *scannerMetrics) timeN(s scannerMetric) func(n int) {
+ 	startTime := time.Now()
+-	return func(n int) func() {
+-		return func() {
+-			duration := time.Since(startTime)
++	return func(n int) {
++		duration := time.Since(startTime)
+ 
+-			atomic.AddUint64(&p.operations[s], uint64(n))
+-			if s < scannerMetricLastRealtime {
+-				p.latency[s].add(duration)
+-			}
++		atomic.AddUint64(&p.operations[s], uint64(n))
++		if s < scannerMetricLastRealtime {
++			p.latency[s].add(duration)
+ 		}
+ 	}
+ }
+-- 
+2.47.3
+

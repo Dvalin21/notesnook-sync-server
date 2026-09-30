@@ -1,0 +1,327 @@
+From 25179bcfe57292e3bc1c833d70d9b7efbd33c0ca Mon Sep 17 00:00:00 2001
+From: Aditya Manthramurthy <donatello@users.noreply.github.com>
+Date: Wed, 15 Oct 2025 10:00:45 -0700
+Subject: [PATCH] fix: check sub-policy properly when present (#21642)
+
+This fixes a security issue where sub-policy attached to a service
+account or STS account is not properly validated under certain "own"
+account operations (like creating new service accounts). This allowed a
+service account to create new service accounts for the same user
+bypassing the inline policy restriction.
+---
+ cmd/admin-handlers-users_test.go | 104 ++++++++++++++++++++++++++++++
+ cmd/iam.go                       |  33 +++++-----
+ cmd/sts-handlers_test.go         | 106 +++++++++++++++++++++++++++++++
+ 3 files changed, 228 insertions(+), 15 deletions(-)
+
+diff --git a/cmd/admin-handlers-users_test.go b/cmd/admin-handlers-users_test.go
+index 2c7ca0536..828264583 100644
+--- a/cmd/admin-handlers-users_test.go
++++ b/cmd/admin-handlers-users_test.go
+@@ -208,6 +208,8 @@ func TestIAMInternalIDPServerSuite(t *testing.T) {
+ 				suite.TestGroupAddRemove(c)
+ 				suite.TestServiceAccountOpsByAdmin(c)
+ 				suite.TestServiceAccountPrivilegeEscalationBug(c)
++				suite.TestServiceAccountPrivilegeEscalationBug2_2025_10_15(c, true)
++				suite.TestServiceAccountPrivilegeEscalationBug2_2025_10_15(c, false)
+ 				suite.TestServiceAccountOpsByUser(c)
+ 				suite.TestServiceAccountDurationSecondsCondition(c)
+ 				suite.TestAddServiceAccountPerms(c)
+@@ -1249,6 +1251,108 @@ func (s *TestSuiteIAM) TestServiceAccountPrivilegeEscalationBug(c *check) {
+ 	}
+ }
+ 
++func (s *TestSuiteIAM) TestServiceAccountPrivilegeEscalationBug2_2025_10_15(c *check, forRoot bool) {
++	ctx, cancel := context.WithTimeout(context.Background(), testDefaultTimeout)
++	defer cancel()
++
++	for i := range 3 {
++		err := s.client.MakeBucket(ctx, fmt.Sprintf("bucket%d", i+1), minio.MakeBucketOptions{})
++		if err != nil {
++			c.Fatalf("bucket create error: %v", err)
++		}
++		defer func(i int) {
++			_ = s.client.RemoveBucket(ctx, fmt.Sprintf("bucket%d", i+1))
++		}(i)
++	}
++
++	allow2BucketsPolicyBytes := []byte(`{
++    "Version": "2012-10-17",
++    "Statement": [
++        {
++            "Sid": "ListBucket1AndBucket2",
++            "Effect": "Allow",
++            "Action": ["s3:ListBucket"],
++            "Resource": ["arn:aws:s3:::bucket1", "arn:aws:s3:::bucket2"]
++        },
++        {
++            "Sid": "ReadWriteBucket1AndBucket2Objects",
++            "Effect": "Allow",
++            "Action": [
++                "s3:DeleteObject",
++                "s3:DeleteObjectVersion",
++                "s3:GetObject",
++                "s3:GetObjectVersion",
++                "s3:PutObject"
++            ],
++            "Resource": ["arn:aws:s3:::bucket1/*", "arn:aws:s3:::bucket2/*"]
++        }
++    ]
++}`)
++
++	if forRoot {
++		// Create a service account for the root user.
++		_, err := s.adm.AddServiceAccount(ctx, madmin.AddServiceAccountReq{
++			Policy:    allow2BucketsPolicyBytes,
++			AccessKey: "restricted",
++			SecretKey: "restricted123",
++		})
++		if err != nil {
++			c.Fatalf("could not create service account")
++		}
++		defer func() {
++			_ = s.adm.DeleteServiceAccount(ctx, "restricted")
++		}()
++	} else {
++		// Create a regular user and attach consoleAdmin policy
++		err := s.adm.AddUser(ctx, "foobar", "foobar123")
++		if err != nil {
++			c.Fatalf("could not create user")
++		}
++
++		_, err = s.adm.AttachPolicy(ctx, madmin.PolicyAssociationReq{
++			Policies: []string{"consoleAdmin"},
++			User:     "foobar",
++		})
++		if err != nil {
++			c.Fatalf("could not attach policy")
++		}
++
++		// Create a service account for the regular user.
++		_, err = s.adm.AddServiceAccount(ctx, madmin.AddServiceAccountReq{
++			Policy:     allow2BucketsPolicyBytes,
++			TargetUser: "foobar",
++			AccessKey:  "restricted",
++			SecretKey:  "restricted123",
++		})
++		if err != nil {
++			c.Fatalf("could not create service account: %v", err)
++		}
++		defer func() {
++			_ = s.adm.DeleteServiceAccount(ctx, "restricted")
++			_ = s.adm.RemoveUser(ctx, "foobar")
++		}()
++	}
++	restrictedClient := s.getUserClient(c, "restricted", "restricted123", "")
++
++	buckets, err := restrictedClient.ListBuckets(ctx)
++	if err != nil {
++		c.Fatalf("err fetching buckets %s", err)
++	}
++	if len(buckets) != 2 || buckets[0].Name != "bucket1" || buckets[1].Name != "bucket2" {
++		c.Fatalf("restricted service account should only have access to bucket1 and bucket2")
++	}
++
++	// Try to escalate privileges
++	restrictedAdmClient := s.getAdminClient(c, "restricted", "restricted123", "")
++	_, err = restrictedAdmClient.AddServiceAccount(ctx, madmin.AddServiceAccountReq{
++		AccessKey: "newroot",
++		SecretKey: "newroot123",
++	})
++	if err == nil {
++		c.Fatalf("restricted service account was able to create service account bypassing sub-policy!")
++	}
++}
++
+ func (s *TestSuiteIAM) SetUpAccMgmtPlugin(c *check) {
+ 	ctx, cancel := context.WithTimeout(context.Background(), testDefaultTimeout)
+ 	defer cancel()
+diff --git a/cmd/iam.go b/cmd/iam.go
+index c2f262143..0d17875f2 100644
+--- a/cmd/iam.go
++++ b/cmd/iam.go
+@@ -2400,21 +2400,8 @@ func isAllowedBySessionPolicyForServiceAccount(args policy.Args) (hasSessionPoli
+ 	// policy, regardless of whether the number of statements is 0, this
+ 	// includes `null`, `{}` and `{"Statement": null}`. In fact, MinIO Console
+ 	// sends `null` when no policy is set and the intended behavior is that the
+-	// service account should inherit parent policy.
+-	//
+-	// However, for a policy like `{"Statement":[]}`, the intention is to not
+-	// provide any permissions via the session policy - i.e. the service account
+-	// can do nothing (such a JSON could be generated by an external application
+-	// as the policy for the service account). Inheriting the parent policy in
+-	// such a case, is a security issue. Ideally, we should not allow such
+-	// behavior, but for compatibility with the Console, we currently allow it.
+-	//
+-	// TODO:
+-	//
+-	// 1. fix console behavior and allow this inheritance for service accounts
+-	// created before a certain (TBD) future date.
+-	//
+-	// 2. do not allow empty statement policies for service accounts.
++	// service account should inherit parent policy. So when policy is empty in
++	// all fields we return hasSessionPolicy=false.
+ 	if subPolicy.Version == "" && subPolicy.Statements == nil && subPolicy.ID == "" {
+ 		hasSessionPolicy = false
+ 		return
+@@ -2423,8 +2410,16 @@ func isAllowedBySessionPolicyForServiceAccount(args policy.Args) (hasSessionPoli
+ 	// As the session policy exists, even if the parent is the root account, it
+ 	// must be restricted by it. So, we set `.IsOwner` to false here
+ 	// unconditionally.
++	//
++	// We also set `DenyOnly` arg to false here - this is an IMPORTANT corner
++	// case: DenyOnly is used only for allowing an account to do actions related
++	// to its own account (like create service accounts for itself, among
++	// others). However when a session policy is present, we need to validate
++	// that the action is actually allowed, rather than checking if the action
++	// is only disallowed.
+ 	sessionPolicyArgs := args
+ 	sessionPolicyArgs.IsOwner = false
++	sessionPolicyArgs.DenyOnly = false
+ 
+ 	// Sub policy is set and valid.
+ 	return hasSessionPolicy, subPolicy.IsAllowed(sessionPolicyArgs)
+@@ -2465,8 +2460,16 @@ func isAllowedBySessionPolicy(args policy.Args) (hasSessionPolicy bool, isAllowe
+ 	// As the session policy exists, even if the parent is the root account, it
+ 	// must be restricted by it. So, we set `.IsOwner` to false here
+ 	// unconditionally.
++	//
++	// We also set `DenyOnly` arg to false here - this is an IMPORTANT corner
++	// case: DenyOnly is used only for allowing an account to do actions related
++	// to its own account (like create service accounts for itself, among
++	// others). However when a session policy is present, we need to validate
++	// that the action is actually allowed, rather than checking if the action
++	// is only disallowed.
+ 	sessionPolicyArgs := args
+ 	sessionPolicyArgs.IsOwner = false
++	sessionPolicyArgs.DenyOnly = false
+ 
+ 	// Sub policy is set and valid.
+ 	return hasSessionPolicy, subPolicy.IsAllowed(sessionPolicyArgs)
+diff --git a/cmd/sts-handlers_test.go b/cmd/sts-handlers_test.go
+index d93443145..a883999e9 100644
+--- a/cmd/sts-handlers_test.go
++++ b/cmd/sts-handlers_test.go
+@@ -42,6 +42,8 @@ func runAllIAMSTSTests(suite *TestSuiteIAM, c *check) {
+ 	// The STS for root test needs to be the first one after setup.
+ 	suite.TestSTSForRoot(c)
+ 	suite.TestSTS(c)
++	suite.TestSTSPrivilegeEscalationBug2_2025_10_15(c, true)
++	suite.TestSTSPrivilegeEscalationBug2_2025_10_15(c, false)
+ 	suite.TestSTSWithDenyDeleteVersion(c)
+ 	suite.TestSTSWithTags(c)
+ 	suite.TestSTSServiceAccountsWithUsername(c)
+@@ -276,6 +278,110 @@ func (s *TestSuiteIAM) TestSTSWithDenyDeleteVersion(c *check) {
+ 	c.mustNotDelete(ctx, minioClient, bucket, versions[0])
+ }
+ 
++func (s *TestSuiteIAM) TestSTSPrivilegeEscalationBug2_2025_10_15(c *check, forRoot bool) {
++	ctx, cancel := context.WithTimeout(context.Background(), testDefaultTimeout)
++	defer cancel()
++
++	for i := range 3 {
++		err := s.client.MakeBucket(ctx, fmt.Sprintf("bucket%d", i+1), minio.MakeBucketOptions{})
++		if err != nil {
++			c.Fatalf("bucket create error: %v", err)
++		}
++		defer func(i int) {
++			_ = s.client.RemoveBucket(ctx, fmt.Sprintf("bucket%d", i+1))
++		}(i)
++	}
++
++	allow2BucketsPolicyBytes := []byte(`{
++    "Version": "2012-10-17",
++    "Statement": [
++        {
++            "Sid": "ListBucket1AndBucket2",
++            "Effect": "Allow",
++            "Action": ["s3:ListBucket"],
++            "Resource": ["arn:aws:s3:::bucket1", "arn:aws:s3:::bucket2"]
++        },
++        {
++            "Sid": "ReadWriteBucket1AndBucket2Objects",
++            "Effect": "Allow",
++            "Action": [
++                "s3:DeleteObject",
++                "s3:DeleteObjectVersion",
++                "s3:GetObject",
++                "s3:GetObjectVersion",
++                "s3:PutObject"
++            ],
++            "Resource": ["arn:aws:s3:::bucket1/*", "arn:aws:s3:::bucket2/*"]
++        }
++    ]
++}`)
++
++	var value cr.Value
++	var err error
++	if forRoot {
++		assumeRole := cr.STSAssumeRole{
++			Client:      s.TestSuiteCommon.client,
++			STSEndpoint: s.endPoint,
++			Options: cr.STSAssumeRoleOptions{
++				AccessKey: globalActiveCred.AccessKey,
++				SecretKey: globalActiveCred.SecretKey,
++				Policy:    string(allow2BucketsPolicyBytes),
++			},
++		}
++		value, err = assumeRole.Retrieve()
++		if err != nil {
++			c.Fatalf("err calling assumeRole: %v", err)
++		}
++	} else {
++		// Create a regular user and attach consoleAdmin policy
++		err := s.adm.AddUser(ctx, "foobar", "foobar123")
++		if err != nil {
++			c.Fatalf("could not create user")
++		}
++
++		_, err = s.adm.AttachPolicy(ctx, madmin.PolicyAssociationReq{
++			Policies: []string{"consoleAdmin"},
++			User:     "foobar",
++		})
++		if err != nil {
++			c.Fatalf("could not attach policy")
++		}
++
++		assumeRole := cr.STSAssumeRole{
++			Client:      s.TestSuiteCommon.client,
++			STSEndpoint: s.endPoint,
++			Options: cr.STSAssumeRoleOptions{
++				AccessKey: "foobar",
++				SecretKey: "foobar123",
++				Policy:    string(allow2BucketsPolicyBytes),
++			},
++		}
++		value, err = assumeRole.Retrieve()
++		if err != nil {
++			c.Fatalf("err calling assumeRole: %v", err)
++		}
++	}
++	restrictedClient := s.getUserClient(c, value.AccessKeyID, value.SecretAccessKey, value.SessionToken)
++
++	buckets, err := restrictedClient.ListBuckets(ctx)
++	if err != nil {
++		c.Fatalf("err fetching buckets %s", err)
++	}
++	if len(buckets) != 2 || buckets[0].Name != "bucket1" || buckets[1].Name != "bucket2" {
++		c.Fatalf("restricted STS account should only have access to bucket1 and bucket2")
++	}
++
++	// Try to escalate privileges
++	restrictedAdmClient := s.getAdminClient(c, value.AccessKeyID, value.SecretAccessKey, value.SessionToken)
++	_, err = restrictedAdmClient.AddServiceAccount(ctx, madmin.AddServiceAccountReq{
++		AccessKey: "newroot",
++		SecretKey: "newroot123",
++	})
++	if err == nil {
++		c.Fatalf("restricted STS account was able to create service account bypassing sub-policy!")
++	}
++}
++
+ func (s *TestSuiteIAM) TestSTSWithTags(c *check) {
+ 	ctx, cancel := context.WithTimeout(context.Background(), testDefaultTimeout)
+ 	defer cancel()
+-- 
+2.47.3
+
