@@ -40,6 +40,12 @@
 # A source build reports `DEVELOPMENT.GOGET` rather than a RELEASE tag. That is
 # expected, and is how you tell a tree build from a stock release image.
 #
+# It reports DEVELOPMENT.GOGET only if the stamp is missing. The build above
+# uses upstream's own buildscripts/gen-ldflags.go, so `--version` names the
+# commit: `minio version notesnook.<commit-time> (commit-id=<full sha>)`. The
+# trailing `grep -q "${MINIO_COMMIT}"` fails the build if that string is not
+# embedded, so a stripped -ldflags cannot silently ship again.
+#
 # Separately: CVE-2026-40344 / CVE-2026-41145 are NOT fixed in this fork. MinIO
 # was archived and the open-source line has no patched release; both advisories
 # name a load-balancer block as the mitigation, which is what Caddyfile does at
@@ -55,9 +61,11 @@ RUN apk add --no-cache git
 WORKDIR /src
 RUN git clone --quiet "${MINIO_REPO}" . \
  && git checkout --quiet "${MINIO_COMMIT}" \
+ && LDFLAGS="$(MINIO_RELEASE=notesnook go run buildscripts/gen-ldflags.go)" \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
-      go build -buildvcs=false -trimpath -ldflags "-s -w" -o /out/minio . \
- && test -x /out/minio
+      go build -buildvcs=false -trimpath -ldflags "$LDFLAGS" -o /out/minio . \
+ && test -x /out/minio \
+ && grep -q "${MINIO_COMMIT}" /out/minio
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates
