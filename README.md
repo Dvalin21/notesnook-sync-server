@@ -124,7 +124,7 @@ This single record covers all subdomains the stack needs:
 | `auth.example.com` | Identity / OAuth server |
 | `sse.example.com` | Server-Sent Events / SignalR real-time sync |
 | `notes.example.com` | Monograph web client |
-| `example.com` | Monograph web client (apex/root) |
+| `example.com` | Monograph web client (apex/root) — see the note below; often you will not want it |
 | `app.example.com` | Full Notesnook web client |
 | `attach.example.com` | S3-compatible attachment storage (MinIO) |
 || `cors.example.com` | CORS proxy for external image embeds |
@@ -132,6 +132,45 @@ This single record covers all subdomains the stack needs:
 || `themes.example.com` | Themes server — serves theme metadata the Notesnook app fetches to render themed notes (optional) |
 
 **Optional:** `minio.example.com` → MinIO admin console (port 9090 internal, routed via Caddy).
+
+### The apex is optional in practice, and a missing cert there is not a fault
+
+The apex (`example.com` itself, as opposed to `notes.example.com`) is a **separate
+decision** from the ten subdomains, and many deployments never make it.
+
+Nothing in this stack depends on the apex. No URL in `.env` points at it —
+`SERVER_DOMAIN` is the base that the subdomains are *derived from*, and every
+URL that a client or a browser actually contacts is a subdomain. The apex route
+exists in the `Caddyfile` (`@monograph host notes.{$DOMAIN} {$DOMAIN}`) and
+would serve the Monograph viewer, but nothing asks for it.
+
+So if you do not add a proxy host for the bare domain, the apex simply does not
+resolve to anything useful. **That is a supported configuration, not a
+misconfiguration.** Two things worth knowing if you land in this state:
+
+- **It is usually not a certificate problem.** If the wildcard certificate
+  already lists the bare domain in its SAN — `DNS:*.example.com, DNS:example.com`
+  — then the certificate is fine and the failure is that your reverse proxy has
+  **no virtual host for the apex**. It rejects the SNI name before the
+  handshake completes, and closes port 80 with an empty reply. Check the SAN
+  before assuming you need a new cert:
+
+  ```bash
+  openssl s_client -connect example.com:443 -servername example.com </dev/null \
+    | openssl x509 -noout -ext subjectAltName
+  ```
+
+  If `example.com` appears there, the fix is a proxy host, not a certificate.
+
+- **It is fail-closed, not a leak.** With no proxy host, the apex returns a TLS
+  error on 443 and an empty reply on 80. Nothing is served. There is also no
+  subdomain-takeover risk, which would require a *dangling CNAME* to a
+  third-party provider you no longer control — a plain `A` record to your own
+  server has nothing to take over.
+
+If you *do* add the proxy host, note that the apex and `notes.example.com` then
+serve the same application, and Monograph's `og:url` still points at
+`notes.example.com`, so the canonical URL stays singular.
 
 No wildcard support? Create individual A records — all pointing to the same IP.
 
