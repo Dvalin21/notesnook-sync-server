@@ -32,7 +32,7 @@ jobs:
           - image: notesnook-sse
             file: ./Streetwriters.Messenger/Dockerfile
             context: .
-          - image: cors-proxy
+          - image: notesnook-cors-proxy
             file: ./cors-proxy/Dockerfile
             context: ./cors-proxy/
           # These two build from a pinned upstream commit inside the Dockerfile
@@ -52,16 +52,23 @@ jobs:
               NN_AUTH_HOST=https://auth.example.com
               NN_SSE_HOST=https://sse.example.com
               NN_MONOGRAPH_HOST=https://notes.example.com
-            - image: notesnook-monograph
-              file: ./monograph/Dockerfile
-              context: ./monograph/
-            # MinIO deleted minio/mc from Docker Hub in October 2025, so this is
-            # compiled from a pinned upstream commit. It is what
-            # scripts/create-minio-app-user.sh uses to create the attachments
-            # bucket and the bucket-scoped service account.
-            - image: mc
-              file: ./mc/Dockerfile
-              context: ./mc/
+          - image: notesnook-monograph
+            file: ./monograph/Dockerfile
+            context: ./monograph/
+          # MinIO deleted minio/mc from Docker Hub in October 2025, so this is
+          # compiled from a pinned upstream commit. It is what
+          # scripts/create-minio-app-user.sh uses to create the attachments
+          # bucket and the bucket-scoped service account.
+          - image: mc
+            file: ./mc/Dockerfile
+            context: ./mc/
+          # MinIO itself, compiled from the pinned fork commit in
+          # minio/Dockerfile. It used to be built on one machine and pushed with
+          # nothing in this repo referencing the source tree, so the storage
+          # layer was not reproducible from the project and nothing rebuilt it.
+          - image: minio-notesnook
+            file: ./minio/Dockerfile
+            context: .
     steps:
       # Actions are pinned by SHA. A tag can be repointed at new code without a
       # review, and this workflow holds a Docker Hub credential.
