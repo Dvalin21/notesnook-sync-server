@@ -15,8 +15,12 @@ RUN sed -i 's|fetch("https://api.notesnook.com/health")|fetch(`${import.meta.env
 ARG NN_API_HOST NN_AUTH_HOST NN_SSE_HOST NN_MONOGRAPH_HOST
 ENV NN_API_HOST=${NN_API_HOST} NN_AUTH_HOST=${NN_AUTH_HOST} NN_SSE_HOST=${NN_SSE_HOST} NN_MONOGRAPH_HOST=${NN_MONOGRAPH_HOST}
 RUN npm run build:web && find /app/apps/web/build -name '*.map' -delete
-# Production Stage - ships example.com hosts only; entrypoint swaps in
-# the operator's URLs at boot so no real domain is ever baked in.
+# The NN_* args above are left EMPTY on purpose and nothing passes them.
+# Vite inlines import.meta.env.NN_* at build time, so an arg here would compile
+# the operator's domain into the image and force a rebuild to change it.
+# With them empty the bundle keeps upstream's own defaults, and entrypoint.sh
+# substitutes the operator's URLs at boot from the environment instead.
+# Production Stage - ships upstream Notesnook hosts only.
 FROM nginx:1.28-alpine
 RUN rm -rf /usr/share/nginx/html/*
 COPY --from=builder /app/apps/web/build /usr/share/nginx/html
