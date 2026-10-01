@@ -520,13 +520,13 @@ services:
 
   web:
     <<: *svc
-    # No build args on purpose. Passing the operator's URLs here compiled them
-    # into the bundle at `docker build` time, so the real domain was baked into
-    # the published image layers and had to be re-baked to change. The hosts are
-    # substituted at boot by web/entrypoint.sh from the env_file below instead,
-    # so the image ships only upstream defaults and one .env change is enough.
     build:
       context: ./web
+      args:
+        NN_API_HOST: ${NOTESNOOK_APP_PUBLIC_URL}
+        NN_AUTH_HOST: ${AUTH_SERVER_PUBLIC_URL}
+        NN_SSE_HOST: ${SSE_SERVER_PUBLIC_URL}
+        NN_MONOGRAPH_HOST: ${MONOGRAPH_PUBLIC_URL}
     env_file: *envfile
     deploy:
       resources:
