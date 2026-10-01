@@ -34,7 +34,18 @@ BUCKET=${S3_BUCKET_NAME:-attachments}
 # ~/notesnook is "notesnook-notesnook-s3-1", not "...-notesnook-sync-server-...".
 # Guessing that string breaks every install outside the original directory name.
 S3_CTR=$(docker compose ps -q notesnook-s3 2>/dev/null | head -1)
-[ -n "$S3_CTR" ] || S3_CTR="${COMPOSE_PROJECT_NAME:-notesnook-sync-server}-notesnook-s3-1"
+if [ -z "$S3_CTR" ]; then
+  # Fall back to the project name compose is actually using, not a hardcoded
+  # one. `docker compose config` prints the resolved project name, which matches
+  # the container prefix whether it came from COMPOSE_PROJECT_NAME or the
+  # directory. The previous fallback hardcoded "notesnook-sync-server", so any
+  # checkout in a differently-named directory failed with
+  # "notesnook-s3 is not running: notesnook-sync-server-notesnook-s3-1".
+  PROJECT=$(docker compose config --format json 2>/dev/null \
+            | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  [ -n "$PROJECT" ] || PROJECT=${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}
+  S3_CTR="$PROJECT-notesnook-s3-1"
+fi
 
 # Wait for MinIO instead of failing instantly. This script used to be preceded
 # by a `setup-s3` compose service that had an `until mc alias set` retry loop;
