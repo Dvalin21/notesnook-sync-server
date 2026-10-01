@@ -35,16 +35,14 @@ x-envfile: &envfile
 services:
   caddy:
     <<: *svc
-    # Pinned because the .NET services must name their immediate upstream in
-    # KNOWN_PROXIES, and their immediate upstream is THIS container, not the
-    # TLS terminator in front of it. Docker assigns 172.19.0.x on a best-effort
-    # basis and the address moves whenever this container is recreated -- which
-    # is every time the Caddyfile changes, since `admin off` means a recreate
-    # is the only way to reload. An unpinned address would silently re-break
-    # forwarded headers on the next edit. Must match KNOWN_PROXIES in .env.
-    networks:
-      notesnook:
-        ipv4_address: 172.19.0.12
+    # No pinned ipv4_address here. This used to pin Caddy to 172.19.0.12 so the
+    # .NET services could name it in KNOWN_PROXIES. That constraint is dead:
+    # KNOWN_PROXIES was never passed to any service, appears in no Dockerfile,
+    # no appsettings and no compose environment, and the apps carry no
+    # forwarded-headers middleware. They resolve their public URLs from
+    # *_PUBLIC_URL instead. The pin only forced Docker to allocate the
+    # 172.19.0.0/16 pool, so a second install on the same host failed with
+    # "no configured subnet contains IP address 172.19.0.12". Nothing reads it.
     depends_on:
       cors-proxy:
         condition: service_healthy
