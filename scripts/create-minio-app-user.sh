@@ -126,9 +126,45 @@ docker run --rm --network "$NET" -e MC_HOST_a="http://$AK:$SK@notesnook-s3:9000"
 rm -f "$PROBE"
 echo "    put/read/delete OK"
 
+# Write the credentials back into .env so the next `docker compose up` needs no
+# manual step. compose requires S3_ACCESS_KEY / S3_ACCESS_KEY_ID (it uses the
+# ${VAR:?} form and refuses to parse without them), so they have to exist in
+# .env BEFORE compose starts -- which is why this cannot be a post-start compose
+# service, and why this script has to be the thing that fills them in.
+#
+# Only the two key lines are touched; every other setting is left alone. The
+# substitution is anchored to the start of the line so a value containing "=" is
+# not mangled, and each var is written once even if it appears twice.
+ENV_FILE=${ENV_FILE:-.env}
+[ -f "$ENV_FILE" ] || { echo "no $ENV_FILE -- run: cp .env.example $ENV_FILE" >&2; exit 1; }
+
+set_key() {
+  # set_key <VAR> <value>
+  var="$1"; val="$2"
+  if grep -qE "^${var}=" "$ENV_FILE"; then
+    # BSD/GNU-compatible in-place edit via a temp file, preserving mode.
+    tmp=$(mktemp)
+    awk -v k="$var" -v v="$val" '
+      BEGIN { done = 0 }
+      $0 ~ "^" k "=" { print k "=" v; if (!done) done = 1; next }
+      { print }
+      END { if (!done) print k "=" v }
+    ' "$ENV_FILE" > "$tmp"
+    cat "$tmp" > "$ENV_FILE"     # cat, not mv: keeps ownership and inode
+    rm -f "$tmp"
+  else
+    printf '%s=%s\n' "$var" "$val" >> "$ENV_FILE"
+  fi
+}
+
+set_key S3_ACCESS_KEY_ID "$AK"
+set_key S3_ACCESS_KEY "$SK"
+
 cat <<OUT
 
-Add these to .env, then: docker compose up -d notesnook-server
+Wrote the credentials into $ENV_FILE. You can now run:
+
+  docker compose up -d
 
 S3_ACCESS_KEY_ID=$AK
 S3_ACCESS_KEY=$SK
