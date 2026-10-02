@@ -37,4 +37,20 @@ if [ -n "${NOTESNOOK_APP_HOST:-}" ]; then
   grep -rl 'https://app.example.com' "$HTML" 2>/dev/null \
     | xargs -r sed -i "s|https://app.example.com|${NOTESNOOK_APP_HOST}|g"
 fi
+
+# The themes URL is NOT one of the NN_* build args. Upstream hardcodes it as a
+# plain literal in apps/web/src/common/themes-router.ts:
+#
+#   export const THEME_SERVER_URL = "https://themes-api.notesnook.com";
+#
+# so there is no build-time placeholder to swap and no env var upstream reads --
+# without this rule the browser calls Streetwriters' hosted themes server and
+# never contacts the themes-server in this stack, which serves the full set
+# (98 themes) from THEMES_REPO_URL. Same pattern as the rules above: guarded,
+# value from the environment, never a literal domain in this file.
+if [ -n "${THEMES_SERVER_PUBLIC_URL:-}" ]; then
+  grep -rl 'https://themes-api.notesnook.com' "$HTML" 2>/dev/null \
+    | xargs -r sed -i "s|https://themes-api.notesnook.com|${THEMES_SERVER_PUBLIC_URL}|g"
+fi
+
 exec nginx -g 'daemon off;'
