@@ -278,13 +278,17 @@ bash scripts/create-minio-app-user.sh
 ```
 
 It creates the `attachments` bucket if missing, enables versioning, writes a
-policy, creates the user, smoke-tests put/read/delete, then prints the two
-lines to add to `.env`:
+policy, creates the user, smoke-tests put/read/delete, then **writes the two
+lines directly into `.env`**:
 
 ```
 S3_ACCESS_KEY_ID=<generated>
 S3_ACCESS_KEY=<generated>
 ```
+
+You do not need to copy them by hand. The script rewrites `.env` in place,
+so the values are ready for `docker compose up -d` on the next step. Rerun
+it any time; it generates a fresh service-account key each run.
 
 **The policy enumerates the object actions and nothing else.** Do not widen it
 to `"s3:*"`: on a bucket resource that also grants `s3:DeleteBucket` and
@@ -483,10 +487,41 @@ server {
 
 ### 4. Start the stack
 
+`docker compose up -d` will **refuse to run** until the S3 credentials exist:
+
+```
+S3_ACCESS_KEY_ID is required (not empty)
+```
+
+That is deliberate — compose declares them as `${VAR:?}` so it cannot boot
+half-configured. The credentials come from the MinIO service account, which
+can only be created once MinIO itself is running. So the first start is three
+commands, in this order:
+
 ```bash
+# 1. fetch the published images, then start MinIO only, so the service
+#    account can be provisioned
 docker compose pull
+docker compose up -d notesnook-s3
+
+# 2. provision the bucket-scoped service account; writes S3_ACCESS_KEY_ID
+#    and S3_ACCESS_KEY into .env for you
+bash scripts/create-minio-app-user.sh
+
+# 3. start everything else
 docker compose up -d
 ```
+
+On a **subsequent** update the credentials already exist in `.env`, so
+`docker compose up -d` alone is correct and you can skip straight to it.
+
+If you are building the web image yourself rather than pulling it, use
+`docker compose build web`. A bare `docker build` silently produces a broken
+image: the four `NN_API_HOST` / `NN_AUTH_HOST` / `NN_SSE_HOST` /
+`NN_MONOGRAPH_HOST` build args come from the compose file, and without them
+the compiled bundle falls back to upstream `api.notesnook.com`. The symptom
+is not a build error — the image builds fine and the app then phones home
+to Notesnook's servers instead of yours.
 
 **Watch the boot:**
 
@@ -581,6 +616,42 @@ created in **your MongoDB** on your server — nothing goes to Notesnook's cloud
 4. **Configure custom servers** in the app (see below)
 5. **Create your account** through the app (Sign Up)
 6. **IMPORTANT**: Set `DISABLE_SIGNUPS=true` again and restart
+
+#### Account signup and email
+
+Signup is the one step in this stack that depends on SMTP, and its failure
+mode is quiet. Account creation writes the user row first and sends the
+confirmation email second, so **an account is created even when the email
+cannot be sent** — it just stays unconfirmed. Nothing in the UI reports this.
+
+Verified behaviour, in the order you will hit it:
+
+| `SMTP_*` state | What happens |
+|---|---|
+| Placeholder host (the shipped default) | `MailKit` cannot connect. User is created, no email, account unconfirmed. Signup still reports success. |
+| Real host, but `NOTESNOOK_SENDER_EMAIL` left as the placeholder | `5.7.1 <noreply@your-mail-provider.com>: Sender address rejected: not owned by user <your-account>`. Signup returns `Failed to create an account.` |
+| Sender set to your `SMTP_USERNAME` | Accepted by most providers. |
+| Signup address is not a real mailbox at the provider | `5.1.1 ... Recipient address rejected: User unknown in virtual mailbox table`. |
+
+So set `NOTESNOOK_SENDER_EMAIL` to exactly your `SMTP_USERNAME` before the
+first signup. The identity server also exposes an equivalent endpoint at
+`POST /account/signup` (`SignupController.cs`), which is what the web
+client's own signup form calls; the sync server's `POST /users` is the
+route the mobile and desktop apps use. Both land in the same place.
+
+To confirm the account is usable, check it is confirmed and then request a
+token — signup itself does not hand you a session:
+
+```bash
+curl -s -X POST https://auth.<your-domain>/connect/token \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'grant_type=password&client_id=notesnook&username=<email>&password=<pw>&scope=openid notesnook.sync IdentityServerApi profile offline_access'
+```
+
+`mfa_required: true` is expected on a healthy install — email 2FA is on by
+default, so complete the code step before you get an `access_token`.
+Note that `email` is **not** a valid scope on this server; requesting it
+returns `invalid_scope` before the password is ever checked.
 
 ### 7. Connect clients
 
@@ -824,7 +895,12 @@ it in Settings.]
 | `cors.example.com` shows JSON usage page | That's normal | The CORS proxy is an **API**, not a web page. `GET /` returns instructions. Use `GET /health` to check it's alive. |
 | Web client shows blank page | Monograph needs API_HOST | Check `docker compose logs monograph-server`. It should connect to `notesnook-server:5264`. |
 | Port conflict on 8080 | Another service uses that port | Change the host port in `docker-compose.yml` (e.g., `8080:80` → `8081:80`) and update your TLS proxy. |
-| SMTP warning in logs | SMTP not configured | This is normal if you don't need email 2FA. Configure SMTP_* in `.env` if you want email-based 2FA or password reset. |
+| SMTP warning in logs | SMTP not configured | Only harmless for **sign-in**, not for sign-up. Account creation also sends the confirmation email, so with SMTP unset the user row is created but the confirmation mail never goes out and the account stays unconfirmed. See "Account signup and email" below. |
+| Signup returns `Failed to create an account.` and logs show `5.7.1 ... Sender address rejected` | `NOTESNOOK_SENDER_EMAIL` is still the `noreply@your-mail-provider.com` placeholder | Most providers only accept a sender that is the SMTP account itself or an alias it owns. Set `NOTESNOOK_SENDER_EMAIL` to exactly your `SMTP_USERNAME`. |
+| Signup logs `5.1.1 ... Recipient address rejected: User unknown` | The signup address does not exist at the provider | Expected for made-up addresses. Signup to a real mailbox. |
+| Web app loads, but signing in returns HTTP 500 | `KNOWN_PROXIES` blank or not matching the Caddy pin | The discovery document advertises `http://` instead of `https://` and token introspection fails. Verify: `curl -s https://auth.<your-domain>/.well-known/openid-configuration \| grep jwks_uri` — it must say `https://`. Fix `.env` to match the pinned Caddy IP in `docker-compose.yml` (`172.19.0.12`). The stack boots 11/11 healthy in this state; only sign-in is broken, which is what makes it hard to spot. |
+| Everything is healthy but the browser contacts `api.notesnook.com` | Web image built without the `NN_*` build args | Rebuild with `docker compose build web`, not a bare `docker build`. The args come from the compose file. |
+| `docker compose up` refuses with `S3_ACCESS_KEY_ID is required` | First start, no service account yet | See "Start the stack" above: bring up `notesnook-s3` alone, run the script, then `up -d`. |
 
 ---
 
