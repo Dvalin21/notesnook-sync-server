@@ -220,7 +220,26 @@ namespace Streetwriters.Identity
         {
             Console.WriteLine("[TRACE] Configure: Starting pipeline setup");
 
-            app.UseForwardedHeadersWithKnownProxies(env, "CF-Connecting-IP");
+            // Was `env, "CF-Connecting-IP"`. CF-Connecting-IP is set by Cloudflare, and
+            // this stack's TLS terminator is the operator's own proxy in front of
+            // the internal Caddy -- which forwards it through untouched. So the
+            // header name was chosen for a CDN this deployment does not sit
+            // behind, while the value was being trusted as if it did.
+            //
+            // If the terminator is not Cloudflare, nothing overwrites that
+            // header, so ANY caller can send CF-Connecting-IP: <anything> and
+            // ASP.NET adopts it as the client address. That defeats anything
+            // keyed on the remote IP -- the signup throttle on the notes API
+            // reads exactly this value -- by rotating a header per request.
+            //
+            // The last parameter is the header name. `null` means X-Forwarded-For,
+            // which is what X-ForwardedHeadersOptions defaults to and what both
+            // Caddy and every mainstream TLS terminator in front of this stack
+            // actually set. Pass a Cloudflare header name ONLY when the operator
+            // has documented that the terminator is Cloudflare and overwrites it
+            // -- Caddy's `trusted_proxies static private_ranges` does NOT do that
+            // for a public CDN address.
+            app.UseForwardedHeadersWithKnownProxies(env);
             Console.WriteLine("[TRACE] Configure: Forwarded headers configured");
 
             app.UseCors("notesnook");

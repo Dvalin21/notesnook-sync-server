@@ -126,8 +126,33 @@ namespace Streetwriters.Common.Extensions
                     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
                 };
 
-                if (!string.IsNullOrEmpty(forwardedForHeaderName))
+                if (!string.IsNullOrEmpty(forwardedForHeaderName)
+                    && !string.Equals(forwardedForHeaderName, "X-Forwarded-For", StringComparison.OrdinalIgnoreCase))
                 {
+                    // A non-default client-address header is only as trustworthy
+                    // as whatever the outermost proxy does to it. Headers like
+                    // CF-Connecting-IP are set by a specific CDN; if this
+                    // deployment does not sit behind that CDN, nothing overwrites
+                    // the header, so any caller can choose their own apparent IP
+                    // and defeat every IP-keyed limit (the signup throttle, login
+                    // backoff, audit records).
+                    //
+                    // So requiring it is opt-in rather than a compile-time
+                    // argument: the caller must also set TRUST_CUSTOM_FORWARDED_FOR.
+                    // That converts "quietly trusts a header nothing sets" into
+                    // "trusts it only after the operator says who rewrites it".
+                    if (!string.Equals(
+                            Environment.GetEnvironmentVariable("TRUST_CUSTOM_FORWARDED_FOR"),
+                            "true",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            $"Refusing to trust client-address header '{forwardedForHeaderName}'. "
+                            + "Set TRUST_CUSTOM_FORWARDED_FOR=true only if a proxy you control "
+                            + "overwrites that header on every request, and document which one."
+                        );
+                    }
+
                     forwardedHeadersOptions.ForwardedForHeaderName = forwardedForHeaderName;
                 }
 

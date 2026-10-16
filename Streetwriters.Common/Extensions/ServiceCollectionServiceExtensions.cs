@@ -17,6 +17,8 @@ You should have received a copy of the Affero GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System;
+using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using Streetwriters.Common.Accessors;
 using Streetwriters.Data.DbContexts;
@@ -43,14 +45,45 @@ namespace Streetwriters.Common.Extensions
 
         public static IServiceCollection AddDefaultCors(this IServiceCollection services)
         {
+            var origins = Constants.NOTESNOOK_CORS_ORIGINS;
+
+            if (origins.Length <= 0)
+            {
+                // Refuse to start rather than fall back to AllowAnyOrigin().
+                //
+                // The old code called b.AllowAnyOrigin() here, so a blank or
+                // mistyped NOTESNOOK_CORS_ORIGINS turned into "every website on
+                // the internet may call this API". That is silent and it is the
+                // wrong default for a service holding end-to-end encrypted
+                // account data behind a bearer token. .env.example warns about
+                // it in prose; prose is not a control.
+                //
+                // There is no legitimate self-hosted configuration that needs a
+                // wildcard here: the web client's own origin is what this must
+                // allow, and that is required by the compose `validate` service.
+                throw new InvalidOperationException(
+                    "NOTESNOOK_CORS_ORIGINS is empty. Refusing to start with a "
+                    + "permissive CORS policy (AllowAnyOrigin). Set it to your web "
+                    + "client's origin, e.g. https://app.example.com -- see "
+                    + ".env.example. The previous behaviour silently allowed every "
+                    + "origin."
+                );
+            }
+
+            if (origins.Contains("*"))
+            {
+                throw new InvalidOperationException(
+                    "NOTESNOOK_CORS_ORIGINS contains '*'. Refusing to start: a "
+                    + "wildcard origin on the notes API exposes account data to any "
+                    + "site the holder of a session token visits."
+                );
+            }
+
             services.AddCors(options =>
             {
                 options.AddPolicy("notesnook", (b) =>
                 {
-                    if (Constants.NOTESNOOK_CORS_ORIGINS.Length <= 0)
-                        b.AllowAnyOrigin();
-                    else
-                        b.WithOrigins(Constants.NOTESNOOK_CORS_ORIGINS);
+                    b.WithOrigins(origins);
 
                     b.AllowAnyMethod()
                     .AllowAnyHeader()
