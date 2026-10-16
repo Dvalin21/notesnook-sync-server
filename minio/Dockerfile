@@ -49,8 +49,11 @@
 # Separately: CVE-2026-40344 / CVE-2026-41145 are NOT fixed by the patches.
 # MinIO was archived and the open-source line has no patched release; both
 # advisories name a load-balancer block as the mitigation, which is what
-# Caddyfile does at the @attach route. Do not read the four patches above as
-# covering those.
+# Caddyfile does -- at the @attach route AND at the /attachments/* path
+# fallback, because both reach this binary. Do not read the four patches above
+# as covering those, and do not "simplify" the Caddyfile by dropping the guard
+# from the path fallback: that route used to forward the exact header the
+# advisories say to reject.
 
 ARG GO_VERSION=1.24
 

@@ -22,6 +22,16 @@
     # log on every attachment transfer. That is precisely the input
     # CVE-2026-40344 needs: an access key ALONE permits unsigned object writes,
     # with no secret key and a fabricated signature.
+    #
+    # access_token is redacted for a different reason. Notesnook.API accepts the
+    # bearer token from the query string as well as the header
+    # (Startup.cs, TokenRetrieval.FromQueryString) -- that is required, because
+    # the SignalR sync hub connects over WebSockets and a browser WebSocket
+    # cannot set an Authorization header. So the token legitimately appears in
+    # the URL of /hubs/sync/v2 requests. A reference token in the access log is
+    # a session credential in a plaintext log file that is kept for the log
+    # rotation window.
+    #
     # Every other query parameter is kept, so uploadId/partNumber debugging
     # still works. The query is still sent upstream; only the log is filtered.
     log {
@@ -33,6 +43,7 @@
                     replace X-Amz-Credential REDACTED
                     replace X-Amz-Signature REDACTED
                     replace X-Amz-Security-Token REDACTED
+                    replace access_token REDACTED
                 }
             }
         }
@@ -41,6 +52,24 @@
     handle /health {
         respond "Healthy"
     }
+
+    # ── CVE-2026-40344 / CVE-2026-41145 guard, defined ONCE ──────────────────
+    # Declared here, beside the other matchers, because it has to be applied to
+    # EVERY route that reaches MinIO -- not just @attach. It used to be defined
+    # inside `handle @attach` only, which left the /attachments/* path fallback
+    # (below) forwarding exactly the header the advisories tell you to block:
+    #
+    #   attach.<domain>/attachments/obj  X-Amz-Content-Sha256: STREAMING-... -> 403, empty body (Caddy)
+    #   <any other host>/attachments/obj  same request                      -> MinIO's own error, i.e.
+    #                                                                            it REACHED the vulnerable build
+    #
+    # Both advisories (GHSA-9c4q-hq6p-c237, GHSA-hv4r-mvr4-25vw) word the
+    # mitigation unconditionally: "Reject any request containing
+    # X-Amz-Content-Sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER at the reverse
+    # proxy or WAF layer." Patched versions: None. Clients that need trailers
+    # use the signed variant (STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER), which
+    # this does not match.
+    @unsigned_trailer header X-Amz-Content-Sha256 STREAMING-UNSIGNED-PAYLOAD-TRAILER
 
     # Route by Host header
     @sync host sync.{$DOMAIN}
@@ -97,7 +126,11 @@
         # in commercial MinIO AIStor. Both GHSA-9c4q-hq6p-c237 and
         # GHSA-hv4r-mvr4-25vw name this exact load-balancer block as the
         # mitigation, so that is what this does.
-        @unsigned_trailer header X-Amz-Content-Sha256 STREAMING-UNSIGNED-PAYLOAD-TRAILER
+        #
+        # @unsigned_trailer is now defined once at the top of the site block,
+        # because the @s3-path fallback below reaches the SAME MinIO build and
+        # needs the SAME block. A guard that exists on one route only is not a
+        # mitigation.
         respond @unsigned_trailer 403
 
         # Same cap as the sync route: presigned multipart parts PUT straight
@@ -122,6 +155,15 @@
         }
     }
     handle @minio {
+        # The console upstream exists only when MINIO_CONSOLE=on. Answer 404
+        # rather than proxying to a port nothing is listening on, which would
+        # surface as a bare 502 and read like a broken stack.
+        # CEL needs the value as a quoted STRING. {$MINIO_CONSOLE} is substituted
+        # before CEL parses, so `!= "on"` became `!= off` -- an undeclared
+        # identifier -- and Caddy refused to start at all (verified: "compiling
+        # CEL program: undeclared reference to 'off'"). Quote it.
+        @console_off expression "{$MINIO_CONSOLE}" != "on"
+        respond @console_off 404
         reverse_proxy notesnook-s3:9090 {
             header_up X-Forwarded-Host {http.request.host}
         }
@@ -150,6 +192,16 @@
     # Path-based fallbacks (catch unmatched Host headers)
     @s3-path path /attachments/* /minio/*
     handle @s3-path {
+        # Same CVE guard as @attach: this route reaches MinIO's S3 API just as
+        # much as the attach host does. Without this line an attacker who can
+        # present any other Host header reaches the unsigned-trailer code path
+        # that @attach blocks, which is the whole point of the block.
+        respond @unsigned_trailer 403
+
+        # Same body cap as the two routes above: multipart parts PUT here too.
+        request_body {
+            max_size 100MB
+        }
         reverse_proxy notesnook-s3:9000 {
             header_up X-Forwarded-Host {http.request.host}
         }
