@@ -9,7 +9,15 @@
 #   dbdata           Mongo: users, grants, sync items, monograph/inbox records.
 #                    fsyncLock makes the tar crash-consistent; trap guarantees unlock.
 #   dpdata-*         ASP.NET DataProtection keys. Lose them = everyone logged out (data intact).
-#   keystore-data    GPG signing keys. Lose them = regenerate; old verify links die.
+#   keystore-data    IdentityServer signing keys (Startup.cs
+#                    AddFileSystemPersistence -> /app/keystore). Lose them and
+#                    every stored token stops validating -> everyone logged out.
+#   gnupg-identity   The GPG keyring that signs OUTBOUND mail
+#                    (entrypoint.sh GNUPGHOME=/app/.gnupg). This was previously
+#                    an unmounted container path: not backed up here, not backed
+#                    up anywhere, and destroyed by every recreate. Losing it
+#                    means a new signing key, so any recipient who verified the
+#                    previous key loses that verification.
 #   .env             Secrets + URLs. Without it the dump is unrestorable as THIS stack.
 #   s3data           Attachment blobs. Previously EXCLUDED on the theory that
 #                    MinIO versioning plus a PBS snapshot covered it -- neither
@@ -39,7 +47,7 @@ trap 'timeout 60 mongosh "$MONGO" --quiet --eval "db.fsyncUnlock()" >/dev/null 2
 # ASP.NET DataProtection, so that volume is permanently empty (verified: 0 files).
 # Backing up a phantom is how you "restore" a keyring that never existed.
 fail=0
-for v in dbdata s3data dpdata-identity dpdata-notesnook dpdata-sse keystore-data; do
+for v in dbdata s3data dpdata-identity dpdata-notesnook dpdata-sse keystore-data gnupg-identity; do
   # --numeric-owner preserves UID/GID so dpdata/keystore restore with the
   # ownership the .NET host needs. Without it, restores break DataProtection.
   set +e

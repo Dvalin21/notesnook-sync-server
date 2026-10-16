@@ -1,7 +1,21 @@
 #!/bin/sh
 set -e
 
-GPG_HOME="/app/.gnupg"
+# GNUPGHOME, not a literal path. BouncyCastle's GnuPGContext resolves the
+# keyring through GNUPGHOME when it is set and falls back to $HOME/.gnupg
+# otherwise, so the shell keygen below and the signing code in the app have to
+# agree on ONE directory.
+#
+# This is a MOUNT POINT. It used to be an unmounted path in the container
+# layer, which meant: every recreate (image update, compose change, host reboot
+# with a new container id) generated a brand-new keypair, and the previous key
+# was gone with the old container. Recipients who had verified the older key
+# lost that verification, and backups never contained it -- backup.sh archived
+# keystore-data, which is a different directory (the IdentityServer signing-key
+# store, see Startup.cs AddFileSystemPersistence) and never held the GPG key.
+GNUPGHOME=/app/.gnupg
+GPG_HOME="$GNUPGHOME"
+export GNUPGHOME
 KEYSTORE_DIR="/app/keystore"
 
 # Initialize GPG directory
