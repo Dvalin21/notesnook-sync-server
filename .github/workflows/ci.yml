@@ -49,6 +49,20 @@ jobs:
         # shell syntax error in a service the entire stack depends on.
         run: ./scripts/check-compose-scripts.sh
 
+      # The whole solution is ~166 files of C# and CI did not compile any of
+      # it: a syntax error, a bad csproj, or a renamed symbol would merge green
+      # and break the published image. 'dotnet build' is the cheapest gate that
+      # closes that class. Restore is cached on the lock inputs so repeat runs
+      # stay fast; there is no test project in the solution, so this is a compile
+      # check, not a behaviour check.
+      - name: .NET solution builds
+        uses: actions/setup-dotnet@4a2b4d152a186b03afb040b64497b91d97f2ce4c # v4.3.1
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Build
+        run: dotnet build Notesnook.sln -c Release --nologo
+
       - name: cors-proxy typechecks and builds
         working-directory: cors-proxy
         run: |
