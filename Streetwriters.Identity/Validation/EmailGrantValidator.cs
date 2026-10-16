@@ -72,6 +72,33 @@ namespace Streetwriters.Identity.Validation
 
         public string GrantType => Config.EMAIL_GRANT_TYPE;
 
+        // Burn a comparable amount of CPU to the existing-user path below (a
+        // claim lookup plus response construction). A caller who measures can
+        // otherwise tell "no such account" from "account exists" by response
+        // time even though both take one Mongo round trip.
+        //
+        // Fixed 5000 SHA-256 rounds: enough to match the claim-scan cost, cheap
+        // enough that it cannot itself become a denial-of-service lever. The
+        // input mixes the submitted address with a per-process salt so the
+        // result cannot be precomputed by an attacker, and the loop cannot be
+        // optimised away because the accumulator is consumed afterwards.
+        private static readonly byte[] TimingSalt =
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+
+        private static void EqualizeTiming()
+        {
+            var acc = new byte[32];
+            System.Buffer.BlockCopy(TimingSalt, 0, acc, 0, 32);
+            for (var i = 0; i < 5000; i++)
+            {
+                acc = System.Security.Cryptography.SHA256.HashData(acc);
+            }
+            // Keep the result observable so the JIT cannot elide the loop.
+            System.Threading.Volatile.Write(ref TimingSink, acc[0]);
+        }
+
+        private static byte TimingSink;
+
 
         public async Task ValidateAsync(ExtensionGrantValidationContext context)
         {
@@ -83,6 +110,21 @@ namespace Streetwriters.Identity.Validation
                 // ponytail: login must never manufacture accounts. Unknown
                 // emails fail here (upstream behavior); accounts - and their
                 // confirmation mail - come only from explicit signup.
+                //
+                // The user lookup is a Mongo round trip either way, but the
+                // existing-user path below additionally reads the MFA config and
+                // builds a response object. Equalise that with a comparable
+                // amount of work before returning, so response TIME does not
+                // disclose whether an address is registered. This closes the
+                // timing side of the oracle.
+                //
+                // NOT closed by this: the RESPONSE SHAPE still differs (a known
+                // address gets an MFA-scoped token plus additional_data, an
+                // unknown one gets invalid_grant). Removing that requires
+                // changing the passwordless-login contract the Notesnook clients
+                // implement, so it is a protocol change, not a patch. See the
+                // "Account enumeration" entry in PRODUCTION-READINESS.md.
+                EqualizeTiming();
                 context.Result = new GrantValidationResult(TokenRequestErrors.InvalidGrant);
                 return;
             }
@@ -98,7 +140,14 @@ namespace Streetwriters.Identity.Validation
             {
                 ["additional_data"] = new MFARequiredResponse
                 {
-                    PhoneNumber = sendPhoneNumber && user.PhoneNumber != null ? Regex.Replace(user.PhoneNumber, @"\d(?!\\d{0,3}$)", "*") : null,
+                    // Single backslash in BOTH places. This read `@"\d(?!\\d{0,3}$)"`, and in a
+                // verbatim C# string `\\` is two characters, so the lookahead
+                // was "not followed by a literal backslash, then d" -- which
+                // never matches a phone number. Every digit therefore got
+                // masked and the client received +*********** instead of the
+                // intended +*******0123. CustomResourceOwnerValidator.cs:98 is
+                // the correct form and the two are meant to agree.
+                PhoneNumber = sendPhoneNumber && user.PhoneNumber != null ? Regex.Replace(user.PhoneNumber, @"\d(?!\d{0,3}$)", "*") : null,
                     PrimaryMethod = primaryMethod,
                     SecondaryMethod = secondaryMethod,
                 }
