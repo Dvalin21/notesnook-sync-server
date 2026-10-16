@@ -111,6 +111,9 @@ services:
     environment:
       DOMAIN: ${SERVER_DOMAIN:-localhost}
       NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_HOST}
+      # So the Caddyfile can answer 404 on minio.<domain> instead of proxying to
+      # a console that is not running. Same value MinIO itself is given.
+      MINIO_CONSOLE: ${MINIO_CONSOLE:-off}
     healthcheck:
       test:
       - CMD
@@ -188,7 +191,13 @@ services:
         reservations:
           cpus: '0.25'
           memory: 128M
-    env_file: *envfile
+    # env_file replaced by an explicit list. The full .env handed this service
+    # MINIO_ROOT_PASSWORD and S3_ACCESS_KEY as well, so a compromise of the
+    # identity server was also a compromise of object storage -- including the
+    # bucket-scoped credential the notes API holds. Everything this service
+    # actually reads is listed below (see Streetwriters.Common/Constants.cs):
+    # its own Mongo connection, SMTP/Twilio, the API secret it signs with,
+    # instance name, feature toggles, CORS origins and the proxy trust list.
     environment:
       <<: *app-env
       ASPNETCORE_ENVIRONMENT: Production
@@ -196,6 +205,32 @@ services:
       MONGODB_DATABASE_NAME: identity
       MongoDbSettings__ConnectionString: mongodb://${MONGO_USER}:${MONGO_PASS}@notesnook-db:27017/identity?replicaSet=rs0&tls=false&directConnection=true&authSource=admin
       MongoDbSettings__DatabaseName: identity
+      # SMTP -- required for confirmation, password reset and email 2FA. Without
+      # these the signup path throws AFTER creating the user row, so the API
+      # answers 400 while the account exists (documented in
+      # PRODUCTION-READINESS.md P0-1). Only this service talks to SMTP.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_REPLYTO_EMAIL: ${SMTP_REPLYTO_EMAIL:-}
+      NOTESNOOK_SENDER_EMAIL: ${NOTESNOOK_SENDER_EMAIL:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-}
+      # SMS 2FA, optional.
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_SERVICE_SID: ${TWILIO_SERVICE_SID:-}
+      # Instance behaviour.
+      INSTANCE_NAME: ${INSTANCE_NAME}
+      SELF_HOSTED: ${SELF_HOSTED:-1}
+      DISABLE_SIGNUPS: ${DISABLE_SIGNUPS:-false}
+      NOTESNOOK_CORS_ORIGINS: ${NOTESNOOK_CORS_ORIGINS}
+      KNOWN_PROXIES: ${KNOWN_PROXIES}
+      # This service SIGNS tokens with this secret and the notes API
+      # introspects against it (Config.ApiResources ApiSecret, and the
+      # OAuth2Introspection ClientSecret on the notes side). Both halves are
+      # required to be the same value; a mismatch is a 500 on every login.
+      NOTESNOOK_API_SECRET: ${NOTESNOOK_API_SECRET}
     # ponytail: was `nc -z 8264`, which passes the moment the socket binds --
     # before the app has resolved Mongo or read its config. A broken service
     # reported healthy and Caddy routed live traffic into it.
@@ -321,7 +356,12 @@ services:
         reservations:
           cpus: '0.25'
           memory: 128M
-    env_file: *envfile
+    # No env_file. This is a Bun service that reads exactly five variables
+    # (server-app-url.patch: HOST, PORT, API_HOST, PUBLIC_URL,
+    # NOTESNOOK_APP_HOST) plus the non-secret service-discovery block from
+    # x-app-env. env_file was additionally handing it MONGO_PASS,
+    # MINIO_ROOT_PASSWORD, SMTP_PASSWORD, NOTESNOOK_API_SECRET and the S3
+    # service-account credentials, none of which it can read.
     environment:
       <<: *app-env
       API_HOST: http://notesnook-server:5264
@@ -403,9 +443,39 @@ services:
         reservations:
           cpus: '0.5'
           memory: 256M
-    env_file: *envfile
+    # MINIO_ROOT_USER / MINIO_ROOT_PASSWORD only. MinIO needs exactly these two
+    # and reads nothing else from the environment. env_file was also giving it
+    # MONGO_PASS, SMTP_PASSWORD, NOTESNOOK_API_SECRET and the S3 service-account
+    # credentials -- the last of which is the credential the notes API holds, so
+    # a compromise of object storage handed over the notes API's own key too.
+    # That defeats the point of create-minio-app-user.sh.
     environment:
-      MINIO_BROWSER: 'on'
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # The embedded MinIO console is an admin UI for the whole object store,
+      # reachable at minio.<domain>. It requires the ROOT credentials above,
+      # and those root credentials were also present in eight other containers
+      # until the env_file cleanup. An internet-reachable admin surface is not
+      # worth keeping on a stack whose own README calls the host optional.
+      #
+      # Set MINIO_CONSOLE=on in .env if you administer the bucket through the
+      # browser. Off by default: `mc` (scripts/create-minio-app-user.sh) does
+      # everything this stack needs, including bucket creation and versioning.
+      MINIO_BROWSER: ${MINIO_CONSOLE:-off}
+      # NO TELEMETRY, NO PHONE-HOME. This is MinIO's callhome subsystem, which
+      # can ship diagnostics off the box; the env var is the switch that disables
+      # it. Verified on the shipped dvalin21/minio-notesnook image: with it set
+      # to `off`, a running server with the console enabled and a successful
+      # console login holds ZERO established outbound TCP connections --
+      # /proc/net/tcp shows only loopback sockets.
+      #
+      # Set for three reasons that are not "privacy": (1) nothing about this
+      # instance should leave it, (2) a self-host on a home network must not
+      # make unsolicited outbound requests, and (3) if it ever did, that egress
+      # is an availability and compliance question nobody should have to ask
+      # about. The stack needs no other outbound connectivity from this service
+      # except through the notesnook network.
+      MINIO_CALLHOME_ENABLE: 'off'
     healthcheck:
       test:
       - CMD
@@ -447,12 +517,26 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
-    env_file: *envfile
+    # env_file replaced by an explicit list. This service reads its own Mongo
+    # connection, the bucket-scoped S3 credential, the API secret it introspects
+    # with, and the discovery/toggle values from Constants.cs -- not SMTP and
+    # not MINIO_ROOT_*. env_file also meant a compromise of the notes API
+    # yielded the MinIO ROOT credentials, which is exactly the privilege
+    # separation create-minio-app-user.sh exists to provide.
     environment:
       <<: *app-env
       ASPNETCORE_HTTP_PORTS: '5264'
       MONGODB_CONNECTION_STRING: mongodb://${MONGO_USER}:${MONGO_PASS}@notesnook-db:27017/?replSet=rs0&authSource=admin
       MONGODB_DATABASE_NAME: notesnook
+      INSTANCE_NAME: ${INSTANCE_NAME}
+      NOTESNOOK_CORS_ORIGINS: ${NOTESNOOK_CORS_ORIGINS}
+      KNOWN_PROXIES: ${KNOWN_PROXIES}
+      DISABLE_SIGNUPS: ${DISABLE_SIGNUPS:-false}
+      # The client secret this service presents when it introspects a token
+      # against the identity server (Startup.cs AddOAuth2Introspection). It must
+      # equal the identity server's NOTESNOOK_API_SECRET, which is the same value
+      # as the ApiResource secret there.
+      NOTESNOOK_API_SECRET: ${NOTESNOOK_API_SECRET}
       # Bucket-scoped service account, NOT MinIO root. The root credentials
       # grant s3:* on the server, so a compromise of the notes API would be a
       # compromise of object-storage administration. Policy enumerates only
@@ -525,10 +609,24 @@ services:
         reservations:
           cpus: '0.1'
           memory: 64M
-    env_file: *envfile
+    # No env_file, and deliberately no MONGODB_*, S3_*, SMTP_* or MINIO_* here:
+    # the SSE hub pushes notifications and reads nothing from storage. It does
+    # need NOTESNOOK_API_SECRET -- the client secret it introspects tokens with --
+    # plus the discovery block. Previously it received every credential in the
+    # stack, including the Mongo root password.
     environment:
       <<: *app-env
       ASPNETCORE_HTTP_PORTS: '7264'
+      NOTESNOOK_API_SECRET: ${NOTESNOOK_API_SECRET}
+      INSTANCE_NAME: ${INSTANCE_NAME}
+      MONOGRAPH_PUBLIC_URL: ${MONOGRAPH_PUBLIC_URL}
+      KNOWN_PROXIES: ${KNOWN_PROXIES}
+      # This service calls AddDefaultCors (Messenger/Startup.cs:66), which now
+      # throws on an empty value instead of falling back to AllowAnyOrigin.
+      # Without this the SSE hub would fail to start even though the browser
+      # Origin header arrives on the EventSource request, not on the SSE stream.
+      NOTESNOOK_CORS_ORIGINS: ${NOTESNOOK_CORS_ORIGINS}
+      DISABLE_SIGNUPS: ${DISABLE_SIGNUPS:-false}
     healthcheck:
       test:
       - CMD
@@ -549,7 +647,9 @@ services:
     <<: *svc
     # env_file was missing here, so .env was never read and the documented
     # THEMES_REPO_URL was silently ignored in favour of the hardcoded default.
-    env_file: *envfile
+    # It is now passed explicitly rather than by re-adding env_file: this
+    # service reads exactly one variable, and it is not a secret. Handing it the
+    # whole .env would give a git-cloning process every credential in the stack.
     environment:
       HOST: 0.0.0.0
       PORT: 9000
@@ -571,6 +671,13 @@ services:
 
   web:
     <<: *svc
+    # No env_file here, deliberately. This is nginx serving a static bundle
+    # plus a boot-time sed (web/entrypoint.sh); it reads six variables, all of
+    # them PUBLIC URLs, and all six are passed below. env_file was handing this
+    # service the Mongo root password, the MinIO root password, the SMTP
+    # password, NOTESNOOK_API_SECRET, KNOWN_PROXIES and every S3/Mongo
+    # credential -- none of which nginx can read or needs. An attacker who lands
+    # in this container starts from nothing.
     build:
       context: ./web
       args:
@@ -578,7 +685,14 @@ services:
         NN_AUTH_HOST: ${AUTH_SERVER_PUBLIC_URL}
         NN_SSE_HOST: ${SSE_SERVER_PUBLIC_URL}
         NN_MONOGRAPH_HOST: ${MONOGRAPH_PUBLIC_URL}
-    env_file: *envfile
+    environment:
+      # The six variables web/entrypoint.sh substitutes into the bundle.
+      NOTESNOOK_APP_PUBLIC_URL: ${NOTESNOOK_APP_PUBLIC_URL}
+      AUTH_SERVER_PUBLIC_URL: ${AUTH_SERVER_PUBLIC_URL}
+      SSE_SERVER_PUBLIC_URL: ${SSE_SERVER_PUBLIC_URL}
+      MONOGRAPH_PUBLIC_URL: ${MONOGRAPH_PUBLIC_URL}
+      NOTESNOOK_APP_HOST: ${NOTESNOOK_APP_HOST}
+      THEMES_SERVER_PUBLIC_URL: ${THEMES_SERVER_PUBLIC_URL}
     deploy:
       resources:
         limits:
