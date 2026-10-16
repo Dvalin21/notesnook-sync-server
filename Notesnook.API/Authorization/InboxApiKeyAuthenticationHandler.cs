@@ -67,7 +67,13 @@ namespace Notesnook.API.Authorization
 
             try
             {
-                var inboxApiKey = await _inboxApiKeyRepository.FindOneAsync(k => k.Key == apiKey);
+                // Look up by SHA-256 of the presented key. This used to filter
+                // on `k.Key == apiKey`, i.e. the database stored the usable
+                // credential itself, so the collection was a live set of inbox
+                // keys for anyone who could read it (a backup archive, a
+                // misconfigured Mongo bind, a logged query).
+                var apiKeyHash = InboxApiKeyHasher.Hash(apiKey);
+                var inboxApiKey = await _inboxApiKeyRepository.FindOneAsync(k => k.KeyHash == apiKeyHash);
                 if (inboxApiKey == null)
                 {
                     return AuthenticateResult.Fail("Invalid API key");
@@ -78,8 +84,18 @@ namespace Notesnook.API.Authorization
                     return AuthenticateResult.Fail("API key has expired");
                 }
 
-                inboxApiKey.LastUsedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                await _inboxApiKeyRepository.UpsertAsync(inboxApiKey, k => k.Key == apiKey);
+                // LastUsedAt is display-only ("when did this key last run"), so
+                // writing it on EVERY authenticated request was a Mongo write per
+                // request on the hot path for no behavioural gain. Throttle it to
+                // at most once a minute: the value stays useful for "is this key
+                // still in use?", and the write amplification disappears.
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                const long LAST_USED_WRITE_INTERVAL = 60_000;
+                if (now - inboxApiKey.LastUsedAt >= LAST_USED_WRITE_INTERVAL)
+                {
+                    inboxApiKey.LastUsedAt = now;
+                    await _inboxApiKeyRepository.UpsertAsync(inboxApiKey, k => k.KeyHash == apiKeyHash);
+                }
 
                 var claims = new[]
                 {

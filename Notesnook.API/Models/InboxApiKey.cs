@@ -21,6 +21,7 @@ using System.Text.Json.Serialization;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using NanoidDotNet;
+using Notesnook.API.Authorization;
 
 namespace Notesnook.API.Models
 {
@@ -39,7 +40,32 @@ namespace Notesnook.API.Models
         {
             var random = Nanoid.Generate(size: 64);
             Key = "nn__" + random;
+            KeyHash = InboxApiKeyHasher.Hash(Key);
         }
+
+        // SHA-256 of Key, hex, lowercase. This is what authentication looks up.
+        //
+        // The plaintext Key used to be the lookup column, which meant the
+        // database held a usable bearer credential for every user's inbox:
+        // anyone who could read this collection -- a backup archive, a
+        // misconfigured Mongo bind, a log of a query -- held live inbox keys.
+        // A hash removes that entirely: the server compares a digest of the
+        // presented key against a stored digest.
+        //
+        // Nanoid.Generate(size: 64) draws from the CSPRNG, so a plain SHA-256
+        // is appropriate here (no password stretching needed): the input has
+        // ~380 bits of entropy, which makes brute force irrelevant.
+        [JsonPropertyName("keyHash")]
+        public string KeyHash { get; set; } = string.Empty;
+
+        // Plaintext, returned to the creating client ONCE and never again.
+        // BsonIgnore is load-bearing: without it Mongo persists the plaintext
+        // key alongside the hash and the whole point is lost. The client still
+        // receives it over the create response because that path serializes to
+        // JSON, not BSON.
+        [JsonPropertyName("key")]
+        [BsonIgnore]
+        public string Key { get; set; } = string.Empty;
 
         [BsonId]
         [BsonIgnoreIfDefault]
@@ -53,9 +79,6 @@ namespace Notesnook.API.Models
 
         [JsonPropertyName("name")]
         public required string Name { get; set; }
-
-        [JsonPropertyName("key")]
-        public string Key { get; set; } = string.Empty;
 
         [JsonPropertyName("dateCreated")]
         public long DateCreated { get; set; }

@@ -53,6 +53,12 @@ namespace Notesnook.API.Controllers
             try
             {
                 var apiKeys = await inboxApiKeysRepository.FindAsync(t => t.UserId == userId);
+                // `key` is now empty on every document read back from Mongo
+                // (BsonIgnore) -- the plaintext exists only in the response to
+                // the create call. A listed key shows its name, expiry and
+                // lastUsedAt, which is what this endpoint is for; the credential
+                // itself is not recoverable, by design. A user who lost one
+                // creates another.
                 return Ok(apiKeys);
             }
             catch (Exception ex)
@@ -93,6 +99,10 @@ namespace Notesnook.API.Controllers
                     LastUsedAt = 0
                 };
                 await inboxApiKeysRepository.InsertAsync(inboxApiKey);
+                // This response is the ONLY time the plaintext key exists
+                // outside the caller's own possession: Mongo stores KeyHash and
+                // BsonIgnore keeps `key` out of the document. Losing it means
+                // creating a replacement key, not recovering this one.
                 return Ok(inboxApiKey);
             }
             catch (Exception ex)
@@ -114,7 +124,9 @@ namespace Notesnook.API.Controllers
                     return BadRequest(new { error = "Api key is required." });
                 }
 
-                await inboxApiKeysRepository.DeleteAsync(t => t.UserId == userId && t.Key == apiKey);
+                // Delete by hash, like authentication does. Deleting by `Key` would no longer
+            // match anything once the plaintext is not stored.
+            await inboxApiKeysRepository.DeleteAsync(t => t.UserId == userId && t.KeyHash == InboxApiKeyHasher.Hash(apiKey));
                 return Ok(new { message = "Api key deleted successfully." });
             }
             catch (Exception ex)
