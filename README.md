@@ -259,6 +259,14 @@ access key to the access log on every attachment transfer. The `log` directive n
 redacts `X-Amz-Credential`, `X-Amz-Signature` and `X-Amz-Security-Token` while
 keeping every other query parameter, so `uploadId`/`partNumber` debugging survives.
 
+The block is applied at **both** routes that reach MinIO's S3 API — `attach.<domain>`
+and the `/attachments/*` path fallback. It used to exist only on `attach.<domain>`,
+which left the fallback forwarding exactly the header the advisories say to reject;
+a request carrying `X-Amz-Content-Sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER`
+against the fallback reached the vulnerable build and returned MinIO's own error
+instead of Caddy's 403. Verified by before/after test against the real
+`dvalin21/minio-notesnook` image.
+
 **Residual risk, stated plainly:** this is edge mitigation, not a fix. The
 vulnerable code is still in the binary. Anyone who obtains the access key by some
 other route is not protected by the `X-Amz-Content-Sha256` check alone. The only
@@ -898,7 +906,7 @@ it in Settings.]
 | SMTP warning in logs | SMTP not configured | Only harmless for **sign-in**, not for sign-up. Account creation also sends the confirmation email, so with SMTP unset the user row is created but the confirmation mail never goes out and the account stays unconfirmed. See "Account signup and email" below. |
 | Signup returns `Failed to create an account.` and logs show `5.7.1 ... Sender address rejected` | `NOTESNOOK_SENDER_EMAIL` is still the `noreply@your-mail-provider.com` placeholder | Most providers only accept a sender that is the SMTP account itself or an alias it owns. Set `NOTESNOOK_SENDER_EMAIL` to exactly your `SMTP_USERNAME`. |
 | Signup logs `5.1.1 ... Recipient address rejected: User unknown` | The signup address does not exist at the provider | Expected for made-up addresses. Signup to a real mailbox. |
-| Web app loads, but signing in returns HTTP 500 | `KNOWN_PROXIES` blank or not matching the Caddy pin | The discovery document advertises `http://` instead of `https://` and token introspection fails. Verify: `curl -s https://auth.<your-domain>/.well-known/openid-configuration \| grep jwks_uri` — it must say `https://`. Fix `.env` to match the pinned Caddy IP in `docker-compose.yml` (`172.19.0.12`). The stack boots 11/11 healthy in this state; only sign-in is broken, which is what makes it hard to spot. |
+| Web app loads, but signing in returns HTTP 500 | `KNOWN_PROXIES` blank or not matching the Caddy pin | The discovery document advertises `http://` instead of `https://` and token introspection fails. Verify: `curl -s https://auth.<your-domain>/.well-known/openid-configuration \| grep jwks_uri` — it must say `https://`. Fix `.env` so `KNOWN_PROXIES` equals `CADDY_IP` (default `10.203.0.12`). The `validate` service now fails the boot on a mismatch instead of letting you find this later. The stack boots 11/11 healthy in this state; only sign-in is broken, which is what makes it hard to spot. |
 | Everything is healthy but the browser contacts `api.notesnook.com` | Web image built without the `NN_*` build args | Rebuild with `docker compose build web`, not a bare `docker build`. The args come from the compose file. |
 | `docker compose up` refuses with `S3_ACCESS_KEY_ID is required` | First start, no service account yet | See "Start the stack" above: bring up `notesnook-s3` alone, run the script, then `up -d`. |
 

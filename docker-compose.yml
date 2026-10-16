@@ -1,5 +1,20 @@
 networks:
-  notesnook: null
+  # The subnet is pinned, not left to Docker's auto-assignment, because the
+  # caddy service pins an address inside it (see the caddy service comment).
+  #
+  # 10.203.0.0/24 is deliberately OUTSIDE the 172.17.0.0/16 - 172.31.0.0/16
+  # range Docker allocates user-defined networks from. If this subnet sat
+  # inside that range, Docker could assign it to some other network first and
+  # this stack's static address would be unroutable -- the same failure the pin
+  # existed to avoid. Pick any /24 in 10.x that you do not already use.
+  #
+  # To change it: update this subnet, CADDY_IP in .env (the .12 suffix is
+  # arbitrary but must stay inside the subnet), and nothing else. `validate`
+  # enforces that CADDY_IP == KNOWN_PROXIES on every boot.
+  notesnook:
+    ipam:
+      config:
+        - subnet: 10.203.0.0/24
 
 # ── shared defaults ────────────────────────────────────────────────────────
 # Merge with `<<: *svc` so restart policy and log rotation are applied BY
@@ -41,10 +56,37 @@ services:
     # basis and the address moves whenever this container is recreated -- which
     # is every time the Caddyfile changes, since `admin off` means a recreate
     # is the only way to reload. An unpinned address would silently re-break
-    # forwarded headers on the next edit. Must match KNOWN_PROXIES in .env.
+    # forwarded headers on the next edit.
+    #
+    # The pin needs a SUBNET, and the subnet must not be one Docker assigns on
+    # its own. That is what the `ipam` block at the bottom of this file is for.
+    # Without it, `ipv4_address` forces Docker to allocate whichever pool
+    # contains that address, and a second checkout on a host that already owns
+    # 172.19.0.0/16 dies before any container starts:
+    #
+    #   invalid endpoint settings: no configured subnet contains IP address
+    #   172.19.0.12
+    #
+    # Docker hands out 172.17.0.0/16 upward, one /16 per network, in creation
+    # order, so which pool this stack lands in depends entirely on what already
+    # exists on the host. Pinning an address inside Docker's own auto-assigned
+    # range is "works on my box". Pinning the SUBNET too makes it deterministic
+    # on any host.
+    #
+    # CADDY_IP is the single source of truth: the address below, and
+    # KNOWN_PROXIES in .env, are both required to equal it. `validate` fails the
+    # boot if they disagree, because the failure mode is invisible -- every
+    # healthcheck passes and only sign-in breaks, with the discovery document
+    # advertising http:// instead of https://.
+    #
+    # Do NOT "simplify" this by dropping the pin. Commit 1690bf7 records exactly
+    # what happens: the identity server then issues http:// URLs, and token
+    # introspection fails with
+    #   "Endpoint belongs to different authority: http://auth.<domain>/..."
+    # while the stack still reports healthy.
     networks:
       notesnook:
-        ipv4_address: 172.19.0.12
+        ipv4_address: ${CADDY_IP:?CADDY_IP not set - must match KNOWN_PROXIES in .env}
     depends_on:
       cors-proxy:
         condition: service_healthy
@@ -579,6 +621,9 @@ services:
         "MONGO_PASS"
         "S3_ACCESS_KEY_ID"
         "S3_ACCESS_KEY"
+        "CADDY_IP"
+        "KNOWN_PROXIES"
+        "NOTESNOOK_CORS_ORIGINS"
       )
       # SELF_HOSTED=0 sends signup at cloud endpoints that cannot work here and
       # the request then hangs until the proxy times out. Fail at boot instead.
@@ -610,6 +655,56 @@ services:
         "SSE_SERVER_PUBLIC_URL"
         "NOTESNOOK_APP_HOST"
       )
+      # NOTESNOOK_CORS_ORIGINS is required above because AddDefaultCors now
+      # refuses to start on an empty or wildcard value instead of falling back to
+      # AllowAnyOrigin(). Reject the wildcard here as well, so the failure names
+      # the variable instead of appearing as a service that dies at startup.
+      # The policy sends exactly one Access-Control-Allow-Origin value, so a
+      # comma-separated list silently honours only the first entry.
+      case "$${NOTESNOOK_CORS_ORIGINS}" in
+        *,*)
+          echo "Error: NOTESNOOK_CORS_ORIGINS must be a single origin." >&2
+          echo "       Got '$${NOTESNOOK_CORS_ORIGINS}'." >&2
+          echo "       A list only ever honours its first entry." >&2
+          exit 1
+          ;;
+        '*'|'*'*|*'*'*|*' '*)
+          echo "Error: NOTESNOOK_CORS_ORIGINS must not be '*' or contain spaces." >&2
+          echo "       Set it to your web client's origin, e.g. https://app.$${SERVER_DOMAIN}." >&2
+          exit 1
+          ;;
+      esac
+      # ── the pinned Caddy address must agree with what the apps trust ───────────
+      # KNOWN_PROXIES tells the .NET services which upstream is allowed to set
+      # X-Forwarded-Proto; CADDY_IP is the address actually assigned to caddy.
+      # When they disagree, nothing errors loudly: the stack boots 11/11
+      # healthy, and only SIGN-IN is dead, because the identity server builds
+      # absolute URLs from a scheme it no longer trusts and the discovery
+      # document advertises http:// instead of https://. The trap is worth a
+      # boot-time failure. Commit 1690bf7 documents the exact downstream error:
+      #   "Endpoint belongs to different authority: http://auth.<domain>/..."
+      if [ -z "$${KNOWN_PROXIES:-}" ]; then
+        echo "Error: KNOWN_PROXIES is not set. Copy it from .env.example." >&2
+        exit 1
+      fi
+      if [ "$${KNOWN_PROXIES}" != "$${CADDY_IP}" ]; then
+        echo "Error: KNOWN_PROXIES is '$${KNOWN_PROXIES}' but CADDY_IP is '$${CADDY_IP}'." >&2
+        echo "       They must be identical, or sign-in breaks while the stack reports healthy." >&2
+        echo "       CADDY_IP also has to sit inside the notesnook subnet in docker-compose.yml." >&2
+        exit 1
+      fi
+      # The .env.example placeholders are non-empty, so the required-vars loop
+      # above passes on a template that was never filled in -- and the stack
+      # then boots healthy and fails at runtime instead. Catch the placeholders
+      # here, where the cost is one second and a clear message.
+      for var in "$${required_vars[@]}"; do
+        case "$${!var}" in
+          CHANGEME*|"")
+            echo "Error: $$var still holds the .env.example placeholder." >&2
+            exit 1
+            ;;
+        esac
+      done
       for var in "$${url_vars[@]}"; do
         value="$${!var}"
         case "$$value" in
