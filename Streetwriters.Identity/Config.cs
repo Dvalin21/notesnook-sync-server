@@ -60,6 +60,33 @@ namespace Streetwriters.Identity
                 new ApiScope(MFA_PASSWORD_GRANT_TYPE_SCOPE, "Multi-factor authentication password step access")
             };
 
+        // Token lifetimes.
+        //
+        // AbsoluteRefreshTokenLifetime was 0, which IdentityServer4 treats as
+        // "no absolute limit": a sliding token that can be refreshed forever, so
+        // a stolen refresh token is a permanent session that survives password
+        // rotation, session revocation and every other response to a compromise.
+        // There is no reason for a note-taking account to hold a 6-month
+        // self-renewing credential.
+        //
+        // 90 days absolute still comfortably covers the client's own refresh
+        // cycle (SlidingRefreshTokenLifetime 45 days means a token used at least
+        // every 45 days keeps sliding) while forcing a full password login every
+        // 90 days. When the absolute window expires the client must re-auth,
+        // which is the intended effect.
+        //
+        // AccessTokenLifetime dropped from 6h to 1h. The access token is a
+        // REFERENCE token validated by introspection against the identity
+        // server, so it is revocable immediately regardless of lifetime -- this
+        // is defence in depth for the case where the introspection cache is
+        // unavailable and a token cannot be checked. 1h bounds that exposure
+        // without a visible cost: the client refreshes on its own schedule and
+        // the SSE/hub connections are long-lived over WebSockets, not tied to
+        // access-token lifetime.
+        private const int ACCESS_TOKEN_LIFETIME = 60 * 60;              // 1 hour
+        private const int SLIDING_REFRESH_LIFETIME = 45 * 24 * 60 * 60; // 45 days
+        private const int ABSOLUTE_REFRESH_LIFETIME = 90 * 24 * 60 * 60;// 90 days
+
         public static IEnumerable<Client> Clients =>
             new List<Client>
             {
@@ -77,9 +104,11 @@ namespace Streetwriters.Identity
                     RefreshTokenUsage = TokenUsage.ReUse,
                     RefreshTokenExpiration = TokenExpiration.Sliding,
 
-                    AccessTokenLifetime = 6 * 3600, // 6 hours
-                    SlidingRefreshTokenLifetime = 45 * 3600 * 24, // 45 days
-                    AbsoluteRefreshTokenLifetime = 0, // 0 means infinite sliding lifetime
+                    AccessTokenLifetime = ACCESS_TOKEN_LIFETIME,
+                    SlidingRefreshTokenLifetime = SLIDING_REFRESH_LIFETIME,
+                    // Was 0 == "infinite". A stolen refresh token must not be a
+                    // permanent session; see the note above the constants.
+                    AbsoluteRefreshTokenLifetime = ABSOLUTE_REFRESH_LIFETIME,
                     
                     // scopes that client has access to
                     AllowedScopes = { "notesnook.sync", "offline_access", "openid", IdentityServerConstants.LocalApi.ScopeName, "mfa", "profile" },

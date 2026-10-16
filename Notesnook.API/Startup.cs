@@ -290,7 +290,22 @@ namespace Notesnook.API
                 hub.MaximumReceiveMessageSize = 100 * 1024 * 1024;
                 hub.KeepAliveInterval = TimeSpan.FromSeconds(15);
                 hub.ClientTimeoutInterval = TimeSpan.FromMinutes(10);
-                hub.EnableDetailedErrors = true;
+                // Detailed errors put the full exception -- type, message, and
+                // for Mongo failures the collection name and the filter that
+                // failed -- in the hub error sent to the client. That is useful
+                // while developing and is an information leak in production,
+                // where every caller is an authenticated user who should not
+                // learn how the storage layer is wired. Gate it on the
+                // environment rather than deleting it, so a developer still gets
+                // the diagnostics. ASPNETCORE_ENVIRONMENT is set to Production
+                // for this service in docker-compose.yml, so the deployed stack
+                // gets false here.
+                hub.EnableDetailedErrors =
+                    !string.Equals(
+                        Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+                        "Production",
+                        StringComparison.OrdinalIgnoreCase
+                    );
             }).AddMessagePackProtocol().AddJsonProtocol();
 
             Trace("ConfigureServices: SignalR Redis check");

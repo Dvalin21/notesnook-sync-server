@@ -55,7 +55,21 @@ namespace Notesnook.API.Controllers
 
                 if (!hasBody)
                 {
-                    return Ok(Request.GetEncodedUrl() + "&access_token=" + Request.Headers.Authorization.ToString().Replace("Bearer ", ""));
+                    // Used to answer with
+                    //   Ok(GetEncodedUrl() + "&access_token=" + <bearer token>)
+                    // which echoed the caller's own ACCESS TOKEN back in the
+                    // response body AND in the URL. Two problems: the token
+                    // landed in any client-side log or proxy capture of the
+                    // response, and appending it to the encoded URL made it
+                    // part of the request URL -- which Caddy writes to the
+                    // access log for the @sync route, since the log filter only
+                    // redacts the X-Amz-* S3 parameters. A reference token that
+                    // leaks into a log is a leaked session.
+                    //
+                    // The URL is still returned (clients compare it), but with
+                    // no credential attached. Nothing needs the token echoed
+                    // back to prove the upload path works.
+                    return Ok(Request.GetEncodedUrl());
                 }
 
                 if (Constants.IS_SELF_HOSTED) await UploadFileAsync(userId, name, fileSize);
