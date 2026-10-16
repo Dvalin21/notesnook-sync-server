@@ -215,6 +215,13 @@ services:
     volumes:
     - dpdata-identity:/app/.aspnet/DataProtection-Keys
     - keystore-data:/app/keystore
+    # The GPG keyring that signs outbound mail (entrypoint.sh sets
+    # GNUPGHOME here). This MUST be a volume: it was an unmounted path in the
+    # container layer, so every recreate silently generated a new signing key
+    # and the old one was destroyed with the container. It was also never in any
+    # backup -- backup.sh archived keystore-data, which is a different directory.
+    # init-dpdata chowns it to uid 1000 so the non-root app user can write.
+    - gnupg-identity:/app/.gnupg
 
   inbox-api:
     <<: *svc
@@ -246,7 +253,7 @@ services:
     - -c
     - 'echo "Setting DataProtection volume permissions..."
 
-      chown -R 1000:1000 /data/identity /data/notesnook /data/sse /data/keystore
+      chown -R 1000:1000 /data/identity /data/notesnook /data/sse /data/keystore /data/gnupg
 
       echo "Done."
 
@@ -260,6 +267,7 @@ services:
     - dpdata-notesnook:/data/notesnook
     - dpdata-sse:/data/sse
     - keystore-data:/data/keystore
+    - gnupg-identity:/data/gnupg
 
   init-mongo-key:
     <<: *svc
@@ -500,6 +508,7 @@ services:
     - dpdata-notesnook:/vol/dpdata-notesnook:ro
     - dpdata-sse:/vol/dpdata-sse:ro
     - keystore-data:/vol/keystore-data:ro
+    - gnupg-identity:/vol/gnupg-identity:ro
 
   sse-server:
     <<: *svc
@@ -737,5 +746,6 @@ volumes:
   dpdata-notesnook: null
   dpdata-sse: null
   keystore-data: null
+  gnupg-identity: null
   s3data: null
   themesdata: null
