@@ -68,7 +68,13 @@ jobs:
           # layer was not reproducible from the project and nothing rebuilt it.
           - image: minio-notesnook
             file: ./minio/Dockerfile
-            context: .
+            # Must be ./minio/, NOT the repo root. The Dockerfile does
+            # COPY patches /patches and the patches live at minio/patches/.
+            # With context "." the build dies at that COPY with
+            #   failed to calculate checksum ... "/patches": not found
+            # reproduced locally. Nothing else in the Dockerfile comes from the
+            # repo; the source is cloned from minio/minio at build time.
+            context: ./minio/
     steps:
       # Actions are pinned by SHA. A tag can be repointed at new code without a
       # review, and this workflow holds a Docker Hub credential.
