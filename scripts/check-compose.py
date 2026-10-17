@@ -185,6 +185,27 @@ def main() -> int:
                     f"subnet(s) {', '.join(subnets)}"
                 )
 
+    # Caddy CVE-2026-40344 / CVE-2026-41145 guard must precede every host route.
+    import os as _os
+    caddyfile = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "Caddyfile")
+    if _os.path.exists(caddyfile):
+        with open(caddyfile, encoding="utf-8") as fh:
+            clines = fh.readlines()
+        guard_idx = None
+        first_host_handle_idx = None
+        for i, line in enumerate(clines):
+            st = line.strip()
+            if st == "handle @unsigned_trailer {" and guard_idx is None:
+                guard_idx = i
+            if st.startswith("handle @") and st.endswith("{") and first_host_handle_idx is None:
+                name = st[len("handle @"):-1].strip().rstrip("{").strip()
+                if name not in ("unsigned_trailer",):
+                    first_host_handle_idx = i
+        if guard_idx is None:
+            bad.append("Caddyfile: no `handle @unsigned_trailer` block found")
+        elif first_host_handle_idx is not None and guard_idx > first_host_handle_idx:
+            bad.append("Caddyfile: guard shadowed")
+
     if bad:
         print("FAIL")
         for b in bad:

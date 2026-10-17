@@ -60,6 +60,17 @@ jobs:
         # shell syntax error in a service the entire stack depends on.
         run: ./scripts/check-compose-scripts.sh
 
+      # The Caddyfile is a deployed artifact even though it is not compiled:
+      # it ships in the repo and is the only thing standing between MinIO and
+      # CVE-2026-40344 / CVE-2026-41145. A syntax error here means the reverse
+      # proxy does not start at all, which is a total outage, and a misplaced
+      # `handle` block silently disables the CVE guard (see the check-compose.py
+      # invariant). Validate it against the real binary.
+      - name: Caddyfile is valid
+        run: |
+          docker run --rm -v "$PWD":/c -w /c -e DOMAIN=example.com -e MINIO_CONSOLE=off \
+            caddy:alpine caddy validate --config Caddyfile --adapter caddyfile
+
       # The whole solution is ~166 files of C# and CI did not compile any of
       # it: a syntax error, a bad csproj, or a renamed symbol would merge green
       # and break the published image. 'dotnet build' is the cheapest gate that
