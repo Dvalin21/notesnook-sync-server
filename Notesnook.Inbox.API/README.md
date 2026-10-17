@@ -43,10 +43,13 @@ services:
 		image: notesnook-inbox-api
 		build: .
 		ports:
-			- "3000:3000"
+			- "5181:5181"
 		environment:
-			PORT: 3000
-			NOTESNOOK_API_SERVER_URL: "https://api.notesnook.com"
+			PORT: 5181
+			# Point this at your own sync server, not api.notesnook.com.
+			# For a self-hosted stack this is http://notesnook-server:5264
+			# (internal) or https://sync.<your-domain> (external).
+			NOTESNOOK_API_SERVER_URL: "https://sync.example.com"
 		restart: unless-stopped
 ```
 
