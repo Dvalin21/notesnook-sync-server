@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # drop-setup-s3 is the branch this fork is developed on. Without it every
+    # push compiles nothing, which is how 4 broken builds sat undetected.
+    branches: [main, master, drop-setup-s3]
   pull_request:
   workflow_dispatch:
 
