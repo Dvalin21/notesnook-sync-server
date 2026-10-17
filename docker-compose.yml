@@ -797,25 +797,47 @@ services:
           exit 1
           ;;
       esac
-      # ── the pinned Caddy address must agree with what the apps trust ───────────
-      # KNOWN_PROXIES tells the .NET services which upstream is allowed to set
+      # ── the pinned Caddy address must be trusted by the apps ──────────────────
+      # KNOWN_PROXIES tells the .NET services which upstreams may set
       # X-Forwarded-Proto; CADDY_IP is the address actually assigned to caddy.
-      # When they disagree, nothing errors loudly: the stack boots 11/11
-      # healthy, and only SIGN-IN is dead, because the identity server builds
-      # absolute URLs from a scheme it no longer trusts and the discovery
-      # document advertises http:// instead of https://. The trap is worth a
-      # boot-time failure. Commit 1690bf7 documents the exact downstream error:
+      # If caddy is NOT in that list the headers are stripped, nothing errors
+      # loudly, the stack reports 11/11 healthy, and only SIGN-IN is dead: the
+      # discovery document then advertises http:// under an https:// issuer and
+      # token introspection fails. Commit 1690bf7 records the exact error:
       #   "Endpoint belongs to different authority: http://auth.<domain>/..."
+      #
+      # Membership, not equality. KNOWN_PROXIES is a comma-separated list
+      # (Constants.cs splits on ','), and an operator legitimately has more
+      # than one trusted hop -- a Cloudflare or nginx terminator in front of the
+      # internal caddy, or an extra proxy on the same network. Requiring the two
+      # to be *identical* rejected those configurations at boot. The invariant
+      # that actually matters is that caddy appears in the list.
       if [ -z "$${KNOWN_PROXIES:-}" ]; then
         echo "Error: KNOWN_PROXIES is not set. Copy it from .env.example." >&2
         exit 1
       fi
-      if [ "$${KNOWN_PROXIES}" != "$${CADDY_IP}" ]; then
-        echo "Error: KNOWN_PROXIES is '$${KNOWN_PROXIES}' but CADDY_IP is '$${CADDY_IP}'." >&2
-        echo "       They must be identical, or sign-in breaks while the stack reports healthy." >&2
-        echo "       CADDY_IP also has to sit inside the notesnook subnet in docker-compose.yml." >&2
-        exit 1
-      fi
+      case ",$${KNOWN_PROXIES}," in
+        *",$${CADDY_IP},"*) ;;
+        *)
+          echo "Error: KNOWN_PROXIES does not contain CADDY_IP ($${CADDY_IP})." >&2
+          echo "       Got '$${KNOWN_PROXIES}'." >&2
+          echo "       The .NET services only honour X-Forwarded-Proto from a" >&2
+          echo "       listed address. Without caddy in the list, sign-in breaks" >&2
+          echo "       while the stack still reports healthy. Add $${CADDY_IP}" >&2
+          echo "       to the comma-separated list." >&2
+          exit 1
+          ;;
+      esac
+      # Every entry must be a bare address. A typo here is silent: the entry is
+      # simply never matched, and the forwarded headers are dropped again.
+      for proxy in $$(echo "$${KNOWN_PROXIES}" | tr ',' ' '); do
+        case "$$proxy" in
+          *[!0-9.]*)
+            echo "Error: KNOWN_PROXIES entry '$$proxy' is not an IPv4 address." >&2
+            exit 1
+            ;;
+        esac
+      done
       # The .env.example placeholders are non-empty, so the required-vars loop
       # above passes on a template that was never filled in -- and the stack
       # then boots healthy and fails at runtime instead. Catch the placeholders
