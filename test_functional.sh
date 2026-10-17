@@ -7,8 +7,12 @@ fail(){ echo -e "${RED}[FAIL]${NC} $*"; FAILS=$((FAILS+1)); }
 warn(){ echo -e "${YELLOW}[WARN]${NC} $*"; }
 FAILS=0
 
-# Domain from CLI arg (default example.com for git-safe commit)
-DOMAIN="${1:-example.com}"
+# Domain from CLI arg, else SERVER_DOMAIN out of .env, else a git-safe literal.
+# Without the .env fallback, running this with no argument against your own
+# deployment sends the wrong Host header and fails ~3 routing checks that are
+# not actually broken.
+DOMAIN="${1:-$(sed -n 's/^SERVER_DOMAIN=//p' .env 2>/dev/null | tail -1)}"
+DOMAIN="${DOMAIN:-example.com}"
 CADDY="http://localhost:8080"
 
 echo "═══ notesnook-sync-server functional tests (domain=$DOMAIN) ═══"
