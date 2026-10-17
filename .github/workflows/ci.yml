@@ -57,12 +57,17 @@ jobs:
       # closes that class. Restore is cached on the lock inputs so repeat runs
       # stay fast; there is no test project in the solution, so this is a compile
       # check, not a behaviour check.
-      - name: .NET solution builds
-        uses: actions/setup-dotnet@4a2b4d152a186b03afb040b64497b91d97f2ce4c # v4.3.1
+      - name: Set up .NET
+        # The previous pin, 4a2b4d152a186b03afb040b64497b91d97f2ce4c, does not
+        # exist in actions/setup-dotnet: the API returns 422 "No commit found
+        # for SHA". The job died during action resolution, so this build gate
+        # has never once run. SHA below is the current v4 tag head, resolved
+        # against the GitHub API rather than copied from anywhere.
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: "9.0.x"
 
-      - name: Build
+      - name: .NET solution builds
         run: dotnet build Notesnook.sln -c Release --nologo
 
       - name: cors-proxy typechecks and builds
