@@ -181,6 +181,16 @@ namespace Streetwriters.Identity
             .AddJwtBearer("Bearer+jwt", options =>
             {
                 options.MapInboundClaims = false;
+                // Deliberately the PUBLIC url, unlike the introspection clients
+                // which use Servers.InternalURL(). This one validates JWT
+                // signatures, and that requires the discovery document whose
+                // ISSUER matches the one the tokens were minted with -- the
+                // public URL. The jwks_uri in that document is absolute, so the
+                // key fetch follows it off the network regardless.
+                //
+                // Consequence, stated plainly: the identity server must be able
+                // to reach its own public hostname to validate a JWT. The data
+                // path (Notesnook.API, SSE hub) no longer has that dependency.
                 options.Authority = Servers.IdentityServer.ToString();
                 options.RequireHttpsMetadata = false;
                 options.TokenValidationParameters = new TokenValidationParameters

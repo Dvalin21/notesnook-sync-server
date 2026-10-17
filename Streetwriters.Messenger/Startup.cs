@@ -72,7 +72,14 @@ namespace Streetwriters.Messenger
             services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddOAuth2Introspection("introspection", options =>
             {
-                options.Authority = Servers.IdentityServer.ToString();
+                // InternalURL, not ToString(): service-to-service. See
+                // Servers.InternalURL for why the public issuer is the wrong
+                // address here.
+                options.Authority = Servers.IdentityServer.InternalURL();
+                // See Notesnook.API/Startup.cs: the internal discovery
+                // document carries the public issuer and IdentityModel
+                // otherwise refuses it. Same reasoning, same service.
+                options.DiscoveryPolicy.ValidateIssuerName = false;
                 options.ClientSecret = Constants.NOTESNOOK_API_SECRET;
                 options.ClientId = "notesnook";
                 options.DiscoveryPolicy.RequireHttps = false;

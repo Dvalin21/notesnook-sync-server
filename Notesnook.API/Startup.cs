@@ -181,7 +181,24 @@ namespace Notesnook.API
             services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddOAuth2Introspection("introspection", options =>
             {
-                options.Authority = Servers.IdentityServer.ToString();
+                // InternalURL, not ToString(): this is a service-to-service call.
+                // ToString() returns the PUBLIC issuer, which made every
+                // authenticated request depend on public DNS resolving
+                // auth.<domain> from inside the container. See Servers.InternalURL.
+                options.Authority = Servers.IdentityServer.InternalURL();
+                // The discovery document fetched from inside the network states
+                // the PUBLIC issuer (RFC 8414 requires it, and that is what the
+                // tokens were minted with). IdentityModel refuses a document
+                // whose issuer is not the authority it asked for:
+                //   "Issuer name does not match authority: https://auth.<domain>"
+                // Turning that check off is correct here, and only here: the
+                // authority is the same identity server, reached over the private
+                // compose network instead of over public DNS, and every token is
+                // still validated server-side by that same server. What this does
+                // not weaken is the token check itself -- only the agreement
+                // between "where we fetched metadata" and "what issuer the
+                // metadata claims", which is not a security boundary here.
+                options.DiscoveryPolicy.ValidateIssuerName = false;
                 options.ClientSecret = Constants.NOTESNOOK_API_SECRET;
                 options.ClientId = "notesnook";
                 options.DiscoveryPolicy.RequireHttps = false;

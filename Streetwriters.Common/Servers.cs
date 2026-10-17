@@ -81,6 +81,40 @@ namespace Streetwriters.Common
             url += Port == 80 ? "" : $":{Port}";
             return url;
         }
+
+        /// <summary>
+        /// In-network address for service-to-service calls. Like WS(), this
+        /// deliberately ignores PublicURL.
+        ///
+        /// ToString() exists to build the OIDC ISSUER, which RFC 8414 requires
+        /// to be the public https URL -- clients validate it. That is correct
+        /// for the issuer and wrong for everything else.
+        ///
+        /// The introspection clients (Notesnook.API and Streetwriters.Messenger)
+        /// were using ToString() as their Authority, so every authenticated API
+        /// call resolved the public hostname over DNS and left the host. On a
+        /// self-host behind a split-horizon DNS, an egress filter, or a firewall
+        /// that blocks the container reaching its own public name, that is not a
+        /// degraded path -- it is a total outage, and it surfaces as
+        ///   "Error connecting to https://auth.&lt;domain&gt;/.well-known/
+        ///    openid-configuration. Name does not resolve"
+        /// on GET /users and every other authenticated route.
+        ///
+        /// Metadata fetched over this address advertises the same authority, so
+        /// the endpoint stays on the docker network. IdentityServer4 builds
+        /// discovery endpoints from the request scheme, not from IssuerUri --
+        /// which is why a request that arrives without X-Forwarded-Proto: https
+        /// gets http:// endpoints under an https:// issuer. Fetching from here
+        /// therefore yields a self-consistent internal document.
+        /// </summary>
+        public string InternalURL()
+        {
+            var url = "";
+            url += "http";
+            url += $"://{Hostname}";
+            url += Port == 80 || Port == 443 ? "" : $":{Port}";
+            return url;
+        }
     }
 
     public class Servers
