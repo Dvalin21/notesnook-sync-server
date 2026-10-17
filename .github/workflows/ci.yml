@@ -40,7 +40,16 @@ jobs:
         # this the step failed on EVERY push at the ${S3_ACCESS_KEY:?} guard
         # and the three steps below it never ran at all. .env.ci holds dummy
         # values only -- it is the compose PARSER being exercised, not a deploy.
-        run: docker compose --env-file .env.ci config -q
+        #
+        # The cp is not redundant with --env-file. Passing --env-file does not
+        # stop Compose stat'ing the default .env: on a clean checkout this step
+        # died with "env file .../.env not found" and exited 1. Reproduced
+        # locally against a .env-free tree of HEAD; putting the same dummy file
+        # at both paths fixes it, and --env-file still wins for interpolation,
+        # so the values actually checked are .env.ci's.
+        run: |
+          cp .env.ci .env
+          docker compose --env-file .env.ci config -q
 
       - name: Compose structure invariants
         # restart policy + log rotation + networks + volume declarations
