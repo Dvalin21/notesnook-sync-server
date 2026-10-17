@@ -70,10 +70,51 @@ stolen material.
    extension point, and changing the response contract would break every
    installed Notesnook client that speaks it.
 
+## Reachability audit of the known advisories
+
+The trigger below says "a published CVE that is reachable from this stack's
+configuration". That was audited rather than assumed, because two advisories do
+exist against IdentityServer4 4.1.2 and `dotnet build` flags them as NU1902:
+
+| Advisory | Also filed as | Affected code |
+| --- | --- | --- |
+| GHSA-55p7-v223-x366 | — | `DefaultIdentityServerInteractionService.GetAuthorizationContextAsync` / `IsValidReturnUrl` |
+| GHSA-ff4q-64jc-gx98 | **CVE-2024-39694** | same defect, filed against Duende |
+
+These are one vulnerability, not two: an **open redirect** in the interactive UI
+path. Impact is phishing — it does not yield credentials or tokens.
+
+**Not reachable in this stack.** The entry points are the Login / Challenge /
+Consent / account-creation pages. This deployment has no UI:
+
+- zero callers of `IsValidReturnUrl` or `GetAuthorizationContextAsync`;
+- zero calls to `Redirect(` or `LocalRedirect(`;
+- no `.cshtml`, `.razor`, or `Views/` anywhere in the tree;
+- no theme or UI packages referenced.
+
+Authentication is the `password` grant plus the `email` / `mfa` /
+`mfa_password` extension grants, driven by the native clients — none of which
+render a page or bounce a browser.
+
+One endpoint does return HTML to a browser: `GET /account/confirm`. It was
+checked rather than waved through. It serves static HTML from
+`Streetwriters.Identity/Templates/` and substitutes two placeholders. Neither is
+attacker-controlled into a redirect — `{{subheading}}` takes fixed literals, and
+`{{errors}}` takes `IdentityError.Description` values from the framework, not
+request input. There is no `returnUrl` parameter and no redirect on any branch.
+
+So the trigger has **not** fired. No mitigation is required for these two, and
+none is possible anyway — there is no patched 4.x release to move to.
+
+This closes the question "is the EOL framework currently exploitable here". It
+does not close "the framework is unmaintained". Those are different risks, and
+only the second one justifies the migration.
+
 ## What would trigger doing it now rather than later
 
 - A published CVE in IdentityServer4 that is reachable from this stack's
-  configuration.
+  configuration. (Audited 2026-10-16: the two that exist are not reachable. See
+  above.)
 - A Duende licence acceptable for a self-hosted deployment.
 - Either of the above becoming true means this file gets deleted in favour of
   the migration branch.
