@@ -47,7 +47,7 @@ Your external proxy terminates TLS.
 
 ---
 
-## Verified status (2026-09-08, images `:latest`)
+## Verified status (2026-10-17, images `:latest` = published `2026.10.16`)
 
 Live stack: all services healthy. Proven end to end with Android
 clients on two devices: signup (seconds) → confirmation email → email
@@ -72,6 +72,21 @@ relogin) → monograph publish/view. 14/14 infrastructure checks green.
   tar + all `dpdata-*` + keystore)
 - Self-host entitlements (BELIEVER); no request can hang on dead WAMP
   endpoints (retries bounded) and confirm never fails on notify errors
+- Token introspection over the internal address, not public DNS (Oct 17): verified
+  on a stack where `auth.<domain>` does not resolve from inside any container —
+  `GET /users` returns 200 and SSE returns 200/401/401, zero "Name does not resolve"
+  errors. Published images are amd64+arm64.
+- MinIO CVE-2026-40344 / CVE-2026-41145 fixed in the published image via a
+  local patch (patch 05, ours — upstream is archived). The Caddy CVE guard is
+  hoisted to the top of the site block and fires on all 11 hosts (verified 403
+  on each). CI now validates the Caddyfile on every push.
+- First successful Docker Hub publish: all 8 images (sync, identity, sse,
+  cors-proxy, web, monograph, minio-notesnook, mc), amd64+arm64, tags
+  `2026.10.16` / `2026.10` / `latest`. Previous 3 publish runs failed in 0s
+  due to a dead action SHA pin; fixed and verified green.
+- CI build gate now runs on `drop-setup-s3` (the development branch). It was
+  triggering on `[main, master]` only, which do not exist in this fork, so
+  nothing compiled. The .NET solution builds clean (0 errors).
 
 ### Known gaps (code)
 - SSE live push degraded (inter-service WAMP removed from SSE; clients poll)
@@ -214,7 +229,7 @@ The MinIO admin console runs on port 9090 internally. Caddy can route
 
 `scripts/create-minio-app-user.sh` creates the `attachments` bucket, enables versioning on it, and provisions the bucket-scoped service account. Run it once before the first `docker compose up` — compose will not start without the `S3_ACCESS_KEY` / `S3_ACCESS_KEY_ID` values it prints.
 
-#### ⚠️ MinIO is archived and has unpatched CVEs
+#### ⚠️ MinIO is archived, but the open CVEs are patched in this build
 
 **Read this before exposing `attach.<domain>` to the internet.**
 
@@ -226,8 +241,19 @@ state plainly:
 > minio/minio open-source project.
 > Patched versions: **None**
 
-The fix ships only in commercial **MinIO AIStor**. There is no upstream patch to
-apply to the open-source code, so this stack mitigates at the edge instead.
+Upstream is archived and ships no patched open-source release. However, this
+stack carries its own fix: `minio/patches/05-cve-2026-40344-2026-41145.patch`,
+applied at build time. It adds signature verification on the
+`STREAMING-UNSIGNED-PAYLOAD-TRAILER` write path — the path introduced by
+commit `76913a9fd` (PR #16484) without any verification case — and closes a
+second gap where credentials supplied only via the `X-Amz-Credential` query
+parameter bypassed the `Authorization`-header check entirely. The patch is
+ours; it is not in any upstream repository.
+
+The Caddy guard (below) remains as **defence in depth** — it is the
+load-balancer block the advisories themselves name, and it holds regardless of
+how the binary was built. But it is no longer the only thing protecting the
+stack.
 
 **CVE-2026-40344 / GHSA-9c4q-hq6p-c237** (CVSS 8.8) and
 **CVE-2026-41145 / GHSA-hv4r-mvr4-25vw** — authentication bypass. Anyone holding
@@ -259,18 +285,23 @@ access key to the access log on every attachment transfer. The `log` directive n
 redacts `X-Amz-Credential`, `X-Amz-Signature` and `X-Amz-Security-Token` while
 keeping every other query parameter, so `uploadId`/`partNumber` debugging survives.
 
-The block is applied at **both** routes that reach MinIO's S3 API — `attach.<domain>`
-and the `/attachments/*` path fallback. It used to exist only on `attach.<domain>`,
-which left the fallback forwarding exactly the header the advisories say to reject;
-a request carrying `X-Amz-Content-Sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER`
-against the fallback reached the vulnerable build and returned MinIO's own error
-instead of Caddy's 403. Verified by before/after test against the real
-`dvalin21/minio-notesnook` image.
+The guard is applied as the **first** handle in the Caddy site block, ahead of
+every Host route. This matters because Caddy `handle` blocks are mutually
+exclusive and the first match wins: a guard placed inside a route only covers
+that route. When it lived inside `handle @attach` and `handle @s3-path`, the
+`@s3-path` copy was unreachable — `handle @sync` (a bare host match that
+claims every path) won first for every real Host header. Measured before the fix:
+403 on `attach.<domain>`, 404 (shadowed) on `sync/auth/sse.<domain>`. The guard
+now fires on all 11 hosts. `scripts/check-compose.py` asserts this ordering on
+every CI run so the regression cannot be reintroduced silently.
 
-**Residual risk, stated plainly:** this is edge mitigation, not a fix. The
-vulnerable code is still in the binary. Anyone who obtains the access key by some
-other route is not protected by the `X-Amz-Content-Sha256` check alone. The only
-complete remedy is moving off MinIO Community Edition.
+**Residual risk, stated plainly:** patch 05 covers the specific vulnerability
+the advisories name (`STREAMING-UNSIGNED-PAYLOAD-TRAILER` signature bypass).
+It does not cover any other issue in an archived codebase. MinIO Community
+Edition receives no further patches, so new vulnerabilities found after
+September 2026 will not be fixed. The Caddy guard remains as defence in depth
+for exactly this reason. The only complete remedy is moving off MinIO Community
+Edition (to MinIO AIStor or another S3-compatible store).
 
 **Not affected** (verified against the advisories): CVE-2026-33322 (OIDC — not
 enabled), GHSA-xh8f-g2qw-gcm7 (path traversal in `ReadMultiple` — "single-node
@@ -404,6 +435,13 @@ Every `CHANGEME-*` value must be replaced. Here is every field explained:
 | `MONOGRAPH_PUBLIC_URL` | Yes — required by `validate` service + monograph container | `https://notes.example.com` |
 | `ATTACHMENTS_SERVER_PUBLIC_URL` | Yes — required by `validate` service | `https://attach.example.com` |
 | `NOTESNOOK_APP_HOST` | Yes — required by `validate` service | Web client origin for recovery/verified links, `https://app.example.com` (NOT the sync URL) |
+| `SSE_SERVER_PUBLIC_URL` | Yes — required by `validate` service | `https://sse.example.com` |
+| `MONGO_USER` | Yes — required by `validate` service | MongoDB admin username. Generate with `openssl rand -hex 8`. |
+| `MONGO_PASS` | Yes — required by `validate` service | MongoDB admin password. Generate with `openssl rand -base64 24`. |
+| `S3_ACCESS_KEY_ID` | Yes — required by `validate` service | Filled by `scripts/create-minio-app-user.sh`. Do not set by hand. |
+| `S3_ACCESS_KEY` | Yes — required by `validate` service | Filled by `scripts/create-minio-app-user.sh`. Do not set by hand. |
+| `CADDY_IP` | Yes — required by `validate` service | Pinned IP of the Caddy container. Default `10.203.0.12`. Must equal `KNOWN_PROXIES`. |
+| `KNOWN_PROXIES` | Yes — required by `validate` service | Comma-separated trusted proxy IPs. Default `10.203.0.12`. Must equal `CADDY_IP`. |
 | `MINIO_ROOT_USER` | No — but `create-minio-app-user.sh` will fail if empty | Generate with `openssl rand -base64 12`. Not checked by `validate`; the script refuses to run if blank. |
 | `MINIO_ROOT_PASSWORD` | No — but `create-minio-app-user.sh` will fail if empty | Generate with `openssl rand -base64 22`. Not checked by `validate`; the script refuses to run if blank. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | No — optional, warn if missing | Leave blank if not using email features |
@@ -412,6 +450,7 @@ Every `CHANGEME-*` value must be replaced. Here is every field explained:
 || `INBOX_API_PUBLIC_URL` | No — optional, used by Notesnook app only | Public HTTPS URL for the Inbox API (e.g. `https://inbox.example.com`). The Notesnook app POSTs encrypted inbox notifications here. Set to empty string `""` to disable. |
 || `THEMES_SERVER_PUBLIC_URL` | No — optional, used by Notesnook app only | Public HTTPS URL for the Themes Server (e.g. `https://themes.example.com`). The Notesnook app queries this to fetch available theme metadata. Set to empty string `""` to disable. |
 || `THEMES_REPO_URL` | No — optional, used by themes-server container only | Git clone URL for the themes repository. The themes-server clones this on startup and serves theme metadata from it. Default: upstream `streetwriters/notesnook-themes.git`. Change only if you host your own theme repo. |
+|| `MINIO_CONSOLE` | No — optional, defaults to `off` | Set to `on` to expose the MinIO admin console at `minio.<domain>` (port 9090). Default `off` leaves the object store without a browser admin UI. |
 
 **MinIO credentials warning:** If `MINIO_ROOT_USER` or `MINIO_ROOT_PASSWORD` is empty,
 `scripts/create-minio-app-user.sh` will refuse to run. Generate strong values.
