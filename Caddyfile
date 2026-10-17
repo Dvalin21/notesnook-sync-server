@@ -83,6 +83,37 @@
     @themes host themes.{$DOMAIN}
     @app host app.{$DOMAIN}
 
+    # The guard itself, ahead of every Host route.
+    #
+    # It used to live inside `handle @attach` and `handle @s3-path`. That does
+    # not work, and the reason is Caddy semantics rather than intent: `handle`
+    # blocks are mutually exclusive and the FIRST one that matches wins. Every
+    # host matcher below is a bare `host` test, so it matches any path. That
+    # made `handle @sync` (and @auth, @sse, ...) claim /attachments/* before
+    # `handle @s3-path` was ever considered, and the fallback guard was dead
+    # code for every request carrying a real Host header. Measured, with
+    # X-Amz-Content-Sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER on
+    # /attachments/x, before this change:
+    #
+    #   attach.<domain> -> 403   (guard ran)
+    #   sync.<domain>   -> 404   (shadowed by handle @sync, guard never ran)
+    #
+    # A request with an unrecognised Host did reach @s3-path, which is the only
+    # reason this went unnoticed.
+    #
+    # Placed here it cannot be shadowed by any route added later, which is
+    # the property the comment above this matcher was claiming and did not
+    # have. It is also cheaper: the request dies at the proxy and never
+    # reaches a backend.
+    #
+    # `handle /health` above still comes first. It is a bare path match, so it
+    # would swallow /health with this header present -- harmless, since it
+    # answers a literal string and proxies nothing -- but it means this is the
+    # first handle that guards a ROUTE, not literally the first handle.
+    handle @unsigned_trailer {
+        respond 403
+    }
+
     handle @sync {
         # Bound the upload body. Without this an authenticated client can POST
         # an arbitrarily large body to /s3 and the server will try to buffer it.
@@ -127,11 +158,11 @@
         # GHSA-hv4r-mvr4-25vw name this exact load-balancer block as the
         # mitigation, so that is what this does.
         #
-        # @unsigned_trailer is now defined once at the top of the site block,
-        # because the @s3-path fallback below reaches the SAME MinIO build and
-        # needs the SAME block. A guard that exists on one route only is not a
-        # mitigation.
-        respond @unsigned_trailer 403
+        # The actual `respond 403` for @unsigned_trailer is the first handle in
+        # this site block, not a line in here. See the comment on it. A guard
+        # placed inside a route cannot be relied on to cover the OTHER routes:
+        # these host matchers are bare `host` tests and win on any path, so an
+        # in-route guard on @s3-path was unreachable behind handle @sync.
 
         # Same cap as the sync route: presigned multipart parts PUT straight
         # here, so an unbounded body is reachable without touching /s3.
@@ -192,11 +223,10 @@
     # Path-based fallbacks (catch unmatched Host headers)
     @s3-path path /attachments/* /minio/*
     handle @s3-path {
-        # Same CVE guard as @attach: this route reaches MinIO's S3 API just as
-        # much as the attach host does. Without this line an attacker who can
-        # present any other Host header reaches the unsigned-trailer code path
-        # that @attach blocks, which is the whole point of the block.
-        respond @unsigned_trailer 403
+        # The CVE guard is NOT here. It is the first handle in this site block,
+        # which is the only position that cannot be shadowed by the host
+        # matchers above. A copy here did nothing: every real Host header was
+        # already claimed by handle @sync before this block was considered.
 
         # Same body cap as the two routes above: multipart parts PUT here too.
         request_body {
