@@ -76,7 +76,13 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@49b3bc8e6bdd4d60b7d1550c85d4e0d63d0c2b6f # v3.6.0
+        # The previous pin, 49b3bc8e6bdd4d60b7d1550c85d4e0d63d0c2b6f, is not
+        # a commit in docker/setup-qemu-action: the API returns 422 "No commit
+        # found for SHA". This is step 2, so every job died during action
+        # resolution -- before login, before any build. Same failure mode as
+        # the bad actions/setup-dotnet pin in ci.yml. SHA below is the v3.6.0
+        # tag head, resolved against the GitHub API.
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.10.0
