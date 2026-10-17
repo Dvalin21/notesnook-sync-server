@@ -10,11 +10,9 @@
 # ./monograph and ./web: pin an external source, build, no vendored source.
 #
 # WHY PATCHES AT ALL
-# MinIO was archived in April 2026 with no further security patches, and the
-# open-source line has no patched release for CVE-2026-40344 / CVE-2026-41145
-# (the advisories name a load-balancer block as the mitigation, which is what
-# Caddyfile does). The base tag below predates four upstream security fixes,
-# so they are carried as portable files in ./patches and applied at build time.
+# MinIO was archived in April 2026 with no further upstream security patches.
+# The base tag below predates five fixes, so they are carried as portable files
+# in ./patches and applied at build time (see ./patches/README.md).
 #
 #   01-25179bcfe-21642  IAM sub-policy validation bypass -> a service account
 #                       can exceed the policy it was given. THIS ONE MATTERS:
@@ -23,6 +21,10 @@
 #   02-44951eba3-21612  S3 POST policy trailing-slash bypass
 #   03-8f5489205e-21582 LDAP TLS handshake with StartTLS (LDAP unused here)
 #   04-0654eb5533-21615 data-scanner timeN closure leak (scanner unused here)
+#   05-cve-2026-40344    OURS. No upstream fix exists. Adds signature
+#     2026-41145         verification on the STREAMING-UNSIGNED-PAYLOAD-TRAILER
+#                       write path, which was introduced by 76913a9fd without
+#                       any verification case. See the patch for detail.
 #
 # THE PIN IS LOAD-BEARING. Do not move MINIO_BASE_TAG without re-reading.
 #   RELEASE.2025-09-07T16-13-09Z peels to 07c3a429bfed433e49018cb0f78a52145d4bedeb
@@ -46,14 +48,21 @@
 # `grep -q "${BASE_COMMIT}"` fails the build if that sha is not embedded, so a
 # stripped -ldflags cannot silently ship again.
 #
-# Separately: CVE-2026-40344 / CVE-2026-41145 are NOT fixed by the patches.
-# MinIO was archived and the open-source line has no patched release; both
-# advisories name a load-balancer block as the mitigation, which is what
-# Caddyfile does -- at the @attach route AND at the /attachments/* path
-# fallback, because both reach this binary. Do not read the four patches above
-# as covering those, and do not "simplify" the Caddyfile by dropping the guard
-# from the path fallback: that route used to forward the exact header the
-# advisories say to reject.
+# CVE-2026-40344 / CVE-2026-41145 ARE fixed here, by patch 05, which is ours
+# because upstream is archived and ships no open-source fix.
+#
+# This comment previously said the opposite -- that the patches do NOT cover
+# those CVEs and that the Caddyfile guard was the only mitigation. That was
+# wrong, and it was not harmless: it makes a reader conclude the published
+# binary is vulnerable when it is not.
+#
+# The Caddyfile guard on @attach and the /attachments/* path fallback is still
+# wanted, and still load-bearing: it is the load-balancer block the advisories
+# themselves name, so it is independent defence in depth and it does not depend
+# on this binary having been built from this tree. Do not "simplify" the
+# Caddyfile by dropping the guard from the path fallback; that route used to
+# forward the exact header the advisories say to reject. But do not describe it
+# as the only thing protecting the stack.
 
 ARG GO_VERSION=1.24
 
