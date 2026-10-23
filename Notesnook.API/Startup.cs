@@ -386,6 +386,31 @@ namespace Notesnook.API
 
               app.UseForwardedHeadersWithKnownProxies(env);
 
+            // PUT /s3 forwards the raw request body to object storage. For the
+            // two form content types ASP.NET Core reads the request form during
+            // model binding, which consumes the body; the forward then sees an
+            // empty stream and fails with "Sent 0 request content bytes, but
+            // Content-Length promised N". Measured on this build:
+            //   multipart/form-data      -> HTTP 400
+            //   x-www-form-urlencoded   -> HTTP 400
+            //   application/octet-stream, image/png, text/plain,
+            //   application/json        -> HTTP 200
+            //
+            // Clearing the content type before model binding stops the form
+            // read, so the body is never consumed and the action forwards it
+            // as-is. The action does not look at the content type, and the body
+            // is not read here -- reading it would drain the pipe and produce
+            // exactly the failure being fixed.
+            app.Use(async (context, next) =>
+            {
+                if (context.Request.Path.StartsWithSegments("/s3")
+                    && context.Request.HasFormContentType)
+                {
+                    context.Request.ContentType = null;
+                }
+                await next();
+            });
+
 
             // ponytail: OpenTelemetry commented out for debugging
             // app.UseOpenTelemetryPrometheusScrapingEndpoint((context) => context.Request.Path == "/metrics" && context.Connection.LocalPort == 5067);

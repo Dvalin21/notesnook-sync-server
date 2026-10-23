@@ -117,6 +117,9 @@ namespace Notesnook.API.Controllers
         {
             var url = await s3Service.GetInternalUploadObjectUrlAsync(userId, name) ?? throw new Exception("Could not create signed url.");
 
+            // The body must be read from position zero exactly once. The /s3
+            // middleware in Startup clears a form content type before model
+            // binding so the form read cannot drain the pipe first.
             var content = new StreamContent(HttpContext.Request.BodyReader.AsStream());
             content.Headers.ContentLength = fileSize;
             var response = await S3Service.HttpClient.SendRequestAsync<Response>(url, null, HttpMethod.Put, content);
