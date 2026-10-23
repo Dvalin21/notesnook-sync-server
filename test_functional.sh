@@ -13,7 +13,27 @@ FAILS=0
 # not actually broken.
 DOMAIN="${1:-$(sed -n 's/^SERVER_DOMAIN=//p' .env 2>/dev/null | tail -1)}"
 DOMAIN="${DOMAIN:-example.com}"
-CADDY="http://localhost:8080"
+
+# Resolve paths from this script. It used to hardcode
+# /home/keith/host/notesnook-sync-server/ -- a DIFFERENT checkout -- so on any
+# other clone every check in sections 6-8 reported a healthy service as
+# "missing". A test that can only produce false negatives trains you to ignore it.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The host port Caddy is published on, read from compose instead of hardcoded.
+# README "Troubleshooting" tells operators to change 8080 when it conflicts, and a
+# hardcoded value made this script report false FAILs on exactly those stacks --
+# it was curling whatever else owned 8080 and reading that 404 as a broken route.
+# `docker compose port` reflects the live binding; fall back to the parsed
+# compose file (works when the stack is down), then to the historical default.
+CADDY_PORT=$(docker compose -f "$SCRIPT_DIR/docker-compose.yml" port caddy 80 2>/dev/null \
+             | sed -n 's/.*:\([0-9]*\)$/\1/p' | head -1)
+if [ -z "$CADDY_PORT" ]; then
+  CADDY_PORT=$(docker compose -f "$SCRIPT_DIR/docker-compose.yml" config 2>/dev/null \
+               | sed -n 's/.*published: "\([0-9]*\)".*/\1/p' | head -1)
+fi
+CADDY_PORT=${CADDY_PORT:-8080}
+CADDY="http://localhost:$CADDY_PORT"
 
 echo "═══ notesnook-sync-server functional tests (domain=$DOMAIN) ═══"
 
@@ -78,15 +98,10 @@ UNAUTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: sync.$DOMAIN" "$C
 # COMPOSE has to exist from here on, and section 7 used to define it AFTER this
 # point, so `${COMPOSE}` was unbound under `set -u`. Define it once, here.
 #
-# Derive the paths from this script. It used to hardcode
-# /home/keith/host/notesnook-sync-server/ -- a DIFFERENT checkout -- so on any
-# other clone every check in sections 6-8 reported a healthy service as
-# "missing". A test that can only produce false negatives trains you to ignore it.
-#
-# An ARRAY, not a string. A quoted "docker compose -f ..." string expands as a
-# single word, so the whole command line was passed as one argument to `docker`
-# and every check below silently saw empty output.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+# SCRIPT_DIR is resolved once, at the top of this file. COMPOSE must be an ARRAY,
+# not a string: a quoted "docker compose -f ..." expands as a single word, so the
+# whole command line was passed as one argument to `docker` and every check below
+# silently saw empty output.
 COMPOSE=(docker compose -f "$SCRIPT_DIR/docker-compose.yml" --env-file "$SCRIPT_DIR/.env")
 
 echo; echo "─── 6. DataProtection volumes ───"
