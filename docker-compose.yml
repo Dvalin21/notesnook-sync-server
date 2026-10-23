@@ -842,7 +842,20 @@ services:
       # above passes on a template that was never filled in -- and the stack
       # then boots healthy and fails at runtime instead. Catch the placeholders
       # here, where the cost is one second and a clear message.
+      #
+      # S3_ACCESS_KEY_ID / S3_ACCESS_KEY are exempt from that check: they are
+      # provisioning output, not configuration. scripts/create-minio-app-user.sh
+      # writes them, and it can only run once notesnook-s3 is up -- but
+      # notesnook-s3 declares `depends_on: validate`, so rejecting their
+      # placeholders here made the documented first-start sequence circular and
+      # uncompletable (README "Start the stack" steps 1-3: `up -d notesnook-s3`
+      # aborted with "S3_ACCESS_KEY_ID still holds the .env.example
+      # placeholder", so MinIO never started, so the script could never run).
+      # They stay in required_vars, so a genuinely EMPTY value is still caught.
       for var in "$${required_vars[@]}"; do
+        case " S3_ACCESS_KEY_ID S3_ACCESS_KEY " in
+          *" $$var "*) continue ;;
+        esac
         case "$${!var}" in
           CHANGEME*|"")
             echo "Error: $$var still holds the .env.example placeholder." >&2
