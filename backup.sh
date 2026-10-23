@@ -75,6 +75,15 @@ for v in dbdata s3data dpdata-identity dpdata-notesnook dpdata-sse keystore-data
 done
 # A backup that backed up nothing must never print BACKUP_OK. Ever.
 [ "$fail" -eq 0 ] || { echo "BACKUP_FAILED $STAMP"; exit 1; }
+# Hand the dump to the operator. This container runs as root (the mongo image's
+# default), so without this every artifact lands in ./backups root-owned and the
+# README's "copy off-host" instruction is impossible without sudo. The uid is
+# taken from .env -- the file the operator owns -- so it works on any host with
+# no hardcoded uid, and is a no-op when the operator is already root.
+if [ -f /envfile ]; then
+  owner=$(stat -c '%u:%g' /envfile 2>/dev/null || true)
+  if [ -n "$owner" ]; then chown -R "$owner" "$OUT" 2>/dev/null || true; fi
+fi
 echo "--- $OUT ---"
 ls -la "$OUT"
 echo "BACKUP_OK $STAMP"
