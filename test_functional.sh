@@ -104,6 +104,37 @@ UNAUTH_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: sync.$DOMAIN" "$C
 # silently saw empty output.
 COMPOSE=(docker compose -f "$SCRIPT_DIR/docker-compose.yml" --env-file "$SCRIPT_DIR/.env")
 
+# 5b. Upload body forwarding — the regression that broke form content types.
+#     Measured before the fix: multipart/form-data and
+#     application/x-www-form-urlencoded returned 400 ("Sent 0 request content
+#     bytes, but Content-Length promised N"); octet-stream/png/plain/json
+#     returned 200. The cause was ASP.NET Core draining the body during model
+#     binding for form content types. The fix clears the content type before
+#     binding. This check catches a regression of that fix.
+echo; echo "─── 5b. Upload body forwarding ───"
+UPLOAD_TOKEN=""
+SIGNUP_RESP=$(curl -s -m 40 -X POST -H "Host: sync.$DOMAIN" \
+  -F "email=functest-$(date +%s)@${DOMAIN}" -F "password=Str0ngPass!" \
+  -F "name=functest" -F "client_id=notesnook" "$CADDY/users" 2>/dev/null || true)
+if echo "$SIGNUP_RESP" | grep -q '"access_token"'; then
+  UPLOAD_TOKEN=$(echo "$SIGNUP_RESP" | python3 -c "import json,sys;print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || true)
+fi
+if [ -z "$UPLOAD_TOKEN" ]; then
+  warn "no signup token (SMTP may be unset) — skipping upload checks"
+else
+  for ct in "application/octet-stream" "image/png" "text/plain" "application/json" "multipart/form-data; boundary=----X" "application/x-www-form-urlencoded"; do
+    code=$(curl -s -o /dev/null -w "%{http_code}" -m 30 -X PUT \
+      -H "Host: sync.$DOMAIN" -H "Authorization: Bearer $UPLOAD_TOKEN" \
+      -H "Content-Type: $ct" --data-binary "hello" \
+      "$CADDY/s3?name=functest.txt" 2>/dev/null || echo "000")
+    if [ "$code" = "200" ]; then
+      pass "PUT /s3 ($ct) -> 200"
+    else
+      fail "PUT /s3 ($ct) -> $code (expected 200)"
+    fi
+  done
+fi
+
 echo; echo "─── 6. DataProtection volumes ───"
 # Also used a hardcoded `notesnook-sync-server_` volume-name prefix, which is the
 # compose project name and therefore depends on the checkout directory. A

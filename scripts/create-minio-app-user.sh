@@ -13,13 +13,25 @@
 #
 # Usage:  bash scripts/create-minio-app-user.sh
 # Requires: the stack's .env (for MINIO_ROOT_USER / MINIO_ROOT_PASSWORD).
-#           Starts notesnook-s3 if it is not already up, and waits for it.
+#           Starts notesnook-s3 itself if it is not already up, and waits for it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 [ -f .env ] || { echo "no .env -- run: cp .env.example .env" >&2; exit 1; }
 set -a; . ./.env; set +a
 : "${MINIO_ROOT_USER:?not in .env}" "${MINIO_ROOT_PASSWORD:?not in .env}"
+
+# The header above promises to start notesnook-s3 if it is not already up, and
+# the README's first-start sequence depends on it: the credentials this script
+# mints can only be written once MinIO is running, but notesnook-s3 declares
+# `depends_on: validate`, and validate rejects an empty S3_ACCESS_KEY. Without
+# this block the script burned 120 seconds waiting for a container that was
+# never started and then exited. Start it here and let the wait loop below
+# handle readiness.
+if [ -z "$(docker compose ps -q notesnook-s3 2>/dev/null)" ]; then
+  echo "notesnook-s3 is not running; starting it..."
+  docker compose up -d notesnook-s3
+fi
 
 # MinIO deleted minio/mc from Docker Hub in October 2025, so this image is
 # compiled from a pinned upstream commit by mc/Dockerfile via the `mc` entry in
