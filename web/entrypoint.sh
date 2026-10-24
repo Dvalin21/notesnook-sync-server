@@ -4,15 +4,24 @@
 # ponytail: one sed over hashed assets; reruns are no-ops once replaced.
 set -eu
 HTML=/usr/share/nginx/html
+# Upstream URLs that the bundle bakes in directly (not via NN_* build args).
+# These must be swapped at runtime because the Dockerfile only rewrites the
+# network-check worker, not the main bundle.
 if [ -n "${NOTESNOOK_APP_PUBLIC_URL:-}" ]; then
+  grep -rl 'https://api.notesnook.com' "$HTML" 2>/dev/null \
+    | xargs -r sed -i "s|https://api.notesnook.com|${NOTESNOOK_APP_PUBLIC_URL}|g"
   grep -rl 'https://sync.example.com' "$HTML" 2>/dev/null \
     | xargs -r sed -i "s|https://sync.example.com|${NOTESNOOK_APP_PUBLIC_URL}|g"
 fi
 if [ -n "${AUTH_SERVER_PUBLIC_URL:-}" ]; then
+  grep -rl 'https://auth.streetwriters.co' "$HTML" 2>/dev/null \
+    | xargs -r sed -i "s|https://auth.streetwriters.co|${AUTH_SERVER_PUBLIC_URL}|g"
   grep -rl 'https://auth.example.com' "$HTML" 2>/dev/null \
     | xargs -r sed -i "s|https://auth.example.com|${AUTH_SERVER_PUBLIC_URL}|g"
 fi
 if [ -n "${SSE_SERVER_PUBLIC_URL:-}" ]; then
+  grep -rl 'https://events.streetwriters.co' "$HTML" 2>/dev/null \
+    | xargs -r sed -i "s|https://events.streetwriters.co|${SSE_SERVER_PUBLIC_URL}|g"
   grep -rl 'https://sse.example.com' "$HTML" 2>/dev/null \
     | xargs -r sed -i "s|https://sse.example.com|${SSE_SERVER_PUBLIC_URL}|g"
 fi
