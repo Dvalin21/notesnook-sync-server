@@ -546,13 +546,13 @@ can only be created once MinIO itself is running. So the first start is three
 commands, in this order:
 
 ```bash
-# 1. fetch the published images, then start MinIO only, so the service
-#    account can be provisioned
+# 1. fetch the published images
 docker compose pull
-docker compose up -d notesnook-s3
 
-# 2. provision the bucket-scoped service account; writes S3_ACCESS_KEY_ID
-#    and S3_ACCESS_KEY into .env for you
+# 2. provision the bucket-scoped service account. The script starts MinIO
+#    itself if it is not already running, waits for it to become healthy,
+#    creates the bucket + policy + user, and writes S3_ACCESS_KEY_ID and
+#    S3_ACCESS_KEY into .env for you.
 bash scripts/create-minio-app-user.sh
 
 # 3. start everything else
