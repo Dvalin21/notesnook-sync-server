@@ -47,7 +47,7 @@ Your external proxy terminates TLS.
 
 ---
 
-## Verified status (2026-10-17, images `:latest` = published `2026.10.16`)
+## Verified status (2026-10-25, images `:latest` includes the Oct 25 web CSP fix)
 
 Live stack: all services healthy. Proven end to end with Android
 clients on two devices: signup (seconds) → confirmation email → email
@@ -76,6 +76,8 @@ relogin) → monograph publish/view. 14/14 infrastructure checks green.
   on a stack where `auth.<domain>` does not resolve from inside any container —
   `GET /users` returns 200 and SSE returns 200/401/401, zero "Name does not resolve"
   errors. Published images are amd64+arm64.
+- Web client CSP now allows `blob:` for attachment/image previews (Oct 25); rebuilt
+  and republished `dvalin21/notesnook-web:latest`.
 - MinIO CVE-2026-40344 / CVE-2026-41145 fixed in the published image via a
   local patch (patch 05, ours — upstream is archived). The Caddy CVE guard is
   hoisted to the top of the site block and fires on all 11 hosts (verified 403
@@ -92,6 +94,9 @@ relogin) → monograph publish/view. 14/14 infrastructure checks green.
 - SSE live push degraded (inter-service WAMP removed from SSE; clients poll)
 - Web themes browser still queries official `themes-api.notesnook.com`
   (upstream default; cosmetic, no account data leaves)
+- OAuth2 token introspection is cached for 30 minutes in `notesnook-server`.
+  A token first introspected while an account is unconfirmed stays blocked
+  for up to 30 minutes after the email is confirmed (or until a restart).
 
 ### Not yet tested
 Email change, authenticator-app MFA enrollment,
@@ -442,10 +447,10 @@ Every `CHANGEME-*` value must be replaced. Here is every field explained:
 | `S3_ACCESS_KEY` | Yes — required by `validate` service | Filled by `scripts/create-minio-app-user.sh`. Do not set by hand. |
 | `CADDY_IP` | Yes — required by `validate` service | Pinned IP of the Caddy container. Default `10.203.0.12`. Must equal `KNOWN_PROXIES`. |
 | `KNOWN_PROXIES` | Yes — required by `validate` service | Comma-separated trusted proxy IPs. Default `10.203.0.12`. Must equal `CADDY_IP`. |
-| `MINIO_ROOT_USER` | No — but `create-minio-app-user.sh` will fail if empty | Generate with `openssl rand -base64 12`. Not checked by `validate`; the script refuses to run if blank. |
-| `MINIO_ROOT_PASSWORD` | No — but `create-minio-app-user.sh` will fail if empty | Generate with `openssl rand -base64 22`. Not checked by `validate`; the script refuses to run if blank. |
+| `MINIO_ROOT_USER` | Yes — required by `validate` | Generate with `openssl rand -base64 12`. Also required by `create-minio-app-user.sh`. |
+| `MINIO_ROOT_PASSWORD` | Yes — required by `validate` | Generate with `openssl rand -base64 22`. Also required by `create-minio-app-user.sh`. |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | No — optional, warn if missing | Leave blank if not using email features |
-| `NOTESNOOK_CORS_ORIGINS` | No — used by `cors-proxy` only | Comma-separated origins, default `*`. Not checked by `validate`; the `cors-proxy` container receives it via env_file. |
+| `NOTESNOOK_CORS_ORIGINS` | Yes — required by `validate` | Single origin (no comma, no wildcard, no spaces), e.g. `https://app.example.com`. Default in `.env.example`: `https://app.${SERVER_DOMAIN}`. |
 || `TWILIO_*` | No — optional, passed to all services | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SERVICE_SID` for SMS 2FA via `SMSSender`. Leave empty to disable SMS 2FA. |
 || `INBOX_API_PUBLIC_URL` | No — optional, used by Notesnook app only | Public HTTPS URL for the Inbox API (e.g. `https://inbox.example.com`). The Notesnook app POSTs encrypted inbox notifications here. Set to empty string `""` to disable. |
 || `THEMES_SERVER_PUBLIC_URL` | No — optional, used by Notesnook app only | Public HTTPS URL for the Themes Server (e.g. `https://themes.example.com`). The Notesnook app queries this to fetch available theme metadata. Set to empty string `""` to disable. |
