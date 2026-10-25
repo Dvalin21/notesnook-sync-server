@@ -27,6 +27,7 @@ using System.Text.Encodings.Web;
 using System.Threading.RateLimiting;
 using System.Threading.Tasks;
 using Amazon.Runtime;
+using Amazon.S3;
 using StackExchange.Redis;
 using IdentityModel.AspNetCore.OAuth2Introspection;
 using Microsoft.AspNetCore.Authentication;
@@ -299,7 +300,32 @@ namespace Notesnook.API
             services.AddControllers();
 
             Trace("ConfigureServices: HealthChecks");
-            services.AddHealthChecks();
+            // Object storage is the one dependency /health never verified, and it
+            // is a hard one: attachments cannot be uploaded or downloaded without
+            // it. The check below issues ListBucket on the attachments bucket, so
+            // it fails when the bucket is missing (a wiped s3data volume) or when
+            // the service account in .env no longer exists -- the two failures
+            // that previously produced a completely green stack with every
+            // upload and download dead.
+            //
+            // ListBucket is granted by the policy in scripts/create-minio-app-user.sh,
+            // so a bucket-scoped credential passes this check. ListAllMyBuckets is
+            // NOT in that policy and must not be used here -- it would fail for a
+            // correctly provisioned install.
+            services.AddHealthChecks()
+                .AddS3(options =>
+                {
+                    options.BucketName = Constants.S3_INTERNAL_BUCKET_NAME ?? Constants.S3_BUCKET_NAME;
+                    options.S3Config = new AmazonS3Config
+                    {
+                        // Internal endpoint: this runs inside the compose network,
+                        // so it must not be sent out through the public hostname.
+                        ServiceURL = Constants.S3_INTERNAL_SERVICE_URL ?? Constants.S3_SERVICE_URL,
+                        ForcePathStyle = true,
+                        AuthenticationRegion = Constants.S3_REGION
+                    };
+                    options.Credentials = new BasicAWSCredentials(Constants.S3_ACCESS_KEY_ID, Constants.S3_ACCESS_KEY);
+                });
 
             Trace("ConfigureServices: SignalR");
             var signalR = services.AddSignalR((hub) =>
