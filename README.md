@@ -64,6 +64,7 @@ relogin) → monograph publish/view. 14/14 infrastructure checks green.
 - Rate limiting (6 MFA sends/min/user, fails fast over limit)
 - Password change + reset via recovery mail; session revocation
 - MFA recovery codes (`/mfa/codes`, user-verified Sep 8)
+- Email-based MFA login verified end to end: code sent, code accepted, password step, session issued
 - Inbox end to end: key auth → encrypt → store → received in app (Sep 8;
   no mail involved — the relay is pure HTTP, no MX routing needed)
 - Monograph viewer links point at your app domain (placeholder image +
